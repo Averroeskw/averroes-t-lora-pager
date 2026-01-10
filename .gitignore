@@ -1,0 +1,32 @@
+# PlatformIO build artifacts
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Compiled binaries (regenerated on build)
+*.bin
+*.elf
+*.hex
+
+# Backup files
+*.bak
+*.orig
+
+# Log files
+*.log
+
+# Temporary files
+tmp/
+temp/
