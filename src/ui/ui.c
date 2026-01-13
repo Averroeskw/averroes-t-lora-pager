@@ -553,8 +553,9 @@ void ui_setup_connectivity_page(void) {
     lv_label_set_text(wifi_status, "Status: Disconnected");
     lv_obj_set_style_text_color(wifi_status, UI_COLOR_WARNING, 0);
     
-    lv_obj_t* btn_scan = ui_create_icon_button(wifi_card, UI_ICON_REFRESH, "Scan");
-    lv_obj_t* btn_connect = ui_create_icon_button(wifi_card, UI_ICON_WIFI, "Connect");
+    /* Buttons for future WiFi functionality */
+    ui_create_icon_button(wifi_card, UI_ICON_REFRESH, "Scan");
+    ui_create_icon_button(wifi_card, UI_ICON_WIFI, "Connect");
     
     /* LoRa Card */
     lv_obj_t* lora_card = ui_create_card(content, "LoRa Radio");
@@ -566,12 +567,12 @@ void ui_setup_connectivity_page(void) {
     ui_create_switch_row(lora_card, "Enable LoRa", false);
     
     /* SSH Card */
-    lv_obj_t* ssh_card = ui_create_card(content, "SSH Server");
+    lv_obj_t* ssh_card = ui_create_card(content, "SSH Client");
     
-    ui_create_switch_row(ssh_card, "Local Server", false);
-    ui_create_switch_row(ssh_card, "Remote Server", false);
+    ui_create_switch_row(ssh_card, "WiFi Required", false);
     
-    lv_obj_t* btn_ssh = ui_create_icon_button(ssh_card, LV_SYMBOL_KEYBOARD, "Configure");
+    /* Button for future SSH functionality */
+    ui_create_icon_button(ssh_card, LV_SYMBOL_KEYBOARD, "Connect SSH");
     
     /* Nav bar */
     ui_create_nav_bar(ui_screen_connectivity);
@@ -804,12 +805,13 @@ void ui_setup_info_page(void) {
     /* Hardware Card */
     lv_obj_t* hw_card = ui_create_card(content, "Hardware");
     
+    /* Display shown as 480x222 (landscape) - physical is 222x480 (portrait) */
     lv_obj_t* hw_info = lv_label_create(hw_card);
     lv_label_set_text(hw_info, 
         "MCU: ESP32-S3\n"
         "Flash: 16MB\n"
         "PSRAM: 8MB\n"
-        "Display: 222x480\n"
+        "Display: 480x222\n"
         "Radio: SX1262 LoRa\n"
         "GPS: u-blox MIA-M10Q\n"
         "IMU: BHI260AP\n"
@@ -1118,4 +1120,31 @@ void ui_set_theme(ui_theme_t theme) {
 void ui_apply_theme(void) {
     /* Theme colors are already defined in theme_colors array */
     /* Future: Apply theme colors to styles and refresh UI */
+}
+
+void ui_update_status_bar(void) {
+    /* Future: Refresh all status bar elements */
+    /* Currently handled by individual update functions */
+}
+
+void ui_anim_pulse(lv_obj_t* obj) {
+    if(!obj) return;
+    /* Opacity pulse animation - fades object and back for attention effect */
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_values(&a, LV_OPA_COVER, LV_OPA_50);
+    lv_anim_set_time(&a, 200);
+    lv_anim_set_playback_time(&a, 200);
+    lv_anim_set_exec_cb(&a, anim_opa_cb);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+void ui_anim_glow(lv_obj_t* obj, lv_color_t color) {
+    if(!obj) return;
+    /* Set shadow glow effect */
+    lv_obj_set_style_shadow_width(obj, 16, 0);
+    lv_obj_set_style_shadow_color(obj, color, 0);
+    lv_obj_set_style_shadow_opa(obj, LV_OPA_70, 0);
 }

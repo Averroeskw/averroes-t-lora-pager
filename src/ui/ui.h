@@ -112,13 +112,15 @@ typedef struct {
 
 /*═══════════════════════════════════════════════════════════════════════════
  * FONT DECLARATIONS
+ * Custom fonts - uncomment when font files are added to project
  *═══════════════════════════════════════════════════════════════════════════*/
-LV_FONT_DECLARE(ui_font_mono_12);
-LV_FONT_DECLARE(ui_font_mono_14);
-LV_FONT_DECLARE(ui_font_mono_16);
-LV_FONT_DECLARE(ui_font_bold_18);
-LV_FONT_DECLARE(ui_font_bold_20);
-LV_FONT_DECLARE(ui_font_icons_16);
+/* Future custom fonts - currently using built-in lv_font_montserrat_* */
+/* LV_FONT_DECLARE(ui_font_mono_12); */
+/* LV_FONT_DECLARE(ui_font_mono_14); */
+/* LV_FONT_DECLARE(ui_font_mono_16); */
+/* LV_FONT_DECLARE(ui_font_bold_18); */
+/* LV_FONT_DECLARE(ui_font_bold_20); */
+/* LV_FONT_DECLARE(ui_font_icons_16); */
 
 /*═══════════════════════════════════════════════════════════════════════════
  * SCREEN DECLARATIONS
