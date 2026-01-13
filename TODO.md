@@ -42,6 +42,10 @@ Permanent task tracking for the project. Update this file as tasks are completed
 - [ ] WiFi AP mode for configuration
 - [ ] WiFi client mode for internet
 - [ ] Bluetooth connectivity
+- [ ] SSH client (reference: https://github.com/fernandofatech/M5Cardputer-SSHClient)
+  - [ ] Requires WiFi connectivity first
+  - [ ] Uses libssh_esp32 library
+  - [ ] Terminal-based SSH session interface
 
 ### UI Enhancements
 - [ ] Theme switcher (Cyan, Magenta, Matrix Green, Amber Retro)
