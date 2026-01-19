@@ -104,23 +104,23 @@ void setup() {
   // Initialize Display & LVGL
   beginLvglHelper(instance);
 
-  // Create SSH Terminal
+  // Initialize SSH Terminal
   sshTerminal = new SSHTerminal();
   terminalScreen = sshTerminal->create_terminal_screen();
-  lv_scr_load(terminalScreen);
+  lv_obj_t *launcherScreen = sshTerminal->create_launcher_screen();
 
-  // Display startup message with remote SSH examples
+  // Start with launcher screen
+  sshTerminal->show_launcher();
+
+  // Display startup message (will be visible when user enters terminal)
   sshTerminal->append_text("═══════════════════════════════════════\n");
-  sshTerminal->append_text("  AVERROES SSH Terminal v2.0\n");
+  sshTerminal->append_text("  AVERROES SSH Terminal v2.1\n");
   sshTerminal->append_text("  Secure Shell Client for ESP32\n");
   sshTerminal->append_text("═══════════════════════════════════════\n\n");
   sshTerminal->append_text("Quick Start:\n");
   sshTerminal->append_text("  1. connect <WiFi> <Pass>\n");
-  sshTerminal->append_text("  2. ssh <host> <port> <user> <pass>\n\n");
-  sshTerminal->append_text("Remote Examples:\n");
-  sshTerminal->append_text("  ssh 192.168.1.100 22 root pass\n");
-  sshTerminal->append_text("  ssh my-vps.com 22 admin pass\n\n");
-  sshTerminal->append_text("Type 'help' for all commands\n\n");
+  sshTerminal->append_text("  2. save local <host> <port> <user> <pass>\n");
+  sshTerminal->append_text("  3. home - goes back to launcher\n\n");
   sshTerminal->update_status_bar();
 
   // Hardware interrupts for encoder
@@ -136,19 +136,27 @@ void loop() {
   // System Loop (Keyboard, etc)
   instance.loop();
 
-  // Handle encoder rotation -> Navigate command history
+  // Handle encoder rotation
   int pos = encPos;
   int delta = pos - lastEncPos;
   if (delta != 0 && sshTerminal) {
     lastEncPos = pos;
-    Serial.printf("[ENC] Delta: %d\n", delta);
 
-    // Navigate history (up = older, down = newer)
-    sshTerminal->navigate_history(delta > 0 ? 1 : -1);
-
-    // Haptic feedback
+    // Haptic feedback for every tick
     instance.setHapticEffects(3);
     instance.vibrator();
+
+    if (sshTerminal->is_in_launcher()) {
+      // Navigate launcher buttons
+      lv_group_t *g = sshTerminal->get_launcher_group();
+      if (delta > 0)
+        lv_group_focus_next(g);
+      else
+        lv_group_focus_prev(g);
+    } else {
+      // Navigate history in terminal
+      sshTerminal->navigate_history(delta > 0 ? 1 : -1);
+    }
   }
 
   // Handle encoder button with debounce and long press
@@ -160,34 +168,42 @@ void loop() {
     lastButtonState = isPressed;
 
     if (isPressed) {
-      // Button pressed - start timing for long press
       buttonPressStart = now;
       longPressHandled = false;
+      instance.setHapticEffects(1);
+      instance.vibrator();
     } else {
-      // Button released
+      // Released
       if (!longPressHandled && sshTerminal) {
-        // Short click = Enter
-        Serial.println("[ENC] Click -> Enter");
-        sshTerminal->handle_key_input('\n');
+        if (sshTerminal->is_in_launcher()) {
+          // Select current profile
+          lv_group_t *g = sshTerminal->get_launcher_group();
+          lv_obj_t *focused = lv_group_get_focused(g);
+          if (focused) {
+            const char *type = (const char *)lv_obj_get_user_data(focused);
+            sshTerminal->show_terminal();
+            sshTerminal->connect_to_profile(type);
+          }
+        } else {
+          // Send Enter to terminal
+          sshTerminal->handle_key_input('\n');
+        }
         instance.setHapticEffects(7);
         instance.vibrator();
       }
     }
   }
 
-  // Check for long press while button is held
-  if (isPressed && !longPressHandled &&
+  // Handle long press (only in terminal)
+  if (isPressed && !longPressHandled && !sshTerminal->is_in_launcher() &&
       (now - buttonPressStart) > LONG_PRESS_MS) {
     longPressHandled = true;
-    if (sshTerminal) {
-      Serial.println("[ENC] Long Press -> Delete History Entry");
-      sshTerminal->delete_current_history_entry();
-      instance.setHapticEffects(14);
-      instance.vibrator();
-    }
+    sshTerminal->delete_current_history_entry();
+    instance.setHapticEffects(14);
+    instance.vibrator();
   }
 
-  // Update battery status periodically
+  // Update status bar periodically
   static uint32_t lastBattUpdate = 0;
   if (now - lastBattUpdate > 5000 && sshTerminal) {
     lastBattUpdate = now;

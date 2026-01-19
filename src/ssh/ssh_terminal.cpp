@@ -7,11 +7,16 @@
  */
 
 #include "ssh_terminal.h"
+#include <LilyGoLib.h>
 #include <Preferences.h>
 #include <esp_timer.h>
 
 static const char *TAG = "SSH_TERMINAL";
 static Preferences preferences;
+static SSHTerminal *ssht_instance = nullptr;
+
+// Access to the global LilyGo instance for vibration
+extern LilyGoLoRaPager &instance;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CYBERPUNK YELLOW THEME
@@ -30,7 +35,10 @@ static Preferences preferences;
 #define INPUT_BAR_HEIGHT 32
 #define CORNER_RADIUS 0 // Sharp cyberpunk corners (or 4 for slight rounding)
 
-SSHTerminal::SSHTerminal() { load_history(); }
+SSHTerminal::SSHTerminal() {
+  ssht_instance = this;
+  load_history();
+}
 
 SSHTerminal::~SSHTerminal() {
   save_history();
@@ -130,6 +138,139 @@ lv_obj_t *SSHTerminal::create_terminal_screen() {
   lv_obj_align(input_label, LV_ALIGN_LEFT_MID, 16, 0);
 
   return terminal_screen;
+}
+
+lv_obj_t *SSHTerminal::create_launcher_screen() {
+  launcher_screen = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(launcher_screen, COLOR_BG, 0);
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // TITLE - Large yellow text
+  // ═══════════════════════════════════════════════════════════════════════
+  lv_obj_t *title = lv_label_create(launcher_screen);
+  lv_obj_set_style_text_color(title, COLOR_FG, 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+  lv_label_set_text(title, "AVERROES SSH");
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+
+  lv_obj_t *subtitle = lv_label_create(launcher_screen);
+  lv_obj_set_style_text_color(subtitle, COLOR_DIM, 0);
+  lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_12, 0);
+  lv_label_set_text(subtitle, "SELECT CONNECTION TYPE");
+  lv_obj_align(subtitle, LV_ALIGN_TOP_MID, 0, 50);
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // BUTTONS - Large, navigable
+  // ═══════════════════════════════════════════════════════════════════════
+  launcher_group = lv_group_create();
+
+  // Button Style
+  static lv_style_t style_btn;
+  lv_style_init(&style_btn);
+  lv_style_set_bg_color(&style_btn, COLOR_BG);
+  lv_style_set_border_color(&style_btn, COLOR_DIM);
+  lv_style_set_border_width(&style_btn, 2);
+  lv_style_set_text_color(&style_btn, COLOR_FG);
+  lv_style_set_radius(&style_btn, 4);
+
+  static lv_style_t style_btn_focused;
+  lv_style_init(&style_btn_focused);
+  lv_style_set_bg_color(&style_btn_focused, COLOR_FG);
+  lv_style_set_border_color(&style_btn_focused, COLOR_HIGHLIGHT);
+  lv_style_set_text_color(&style_btn_focused, COLOR_BG);
+
+  // LOCAL SSH BUTTON
+  lv_obj_t *btn_local = lv_btn_create(launcher_screen);
+  lv_obj_set_size(btn_local, 240, 60);
+  lv_obj_align(btn_local, LV_ALIGN_CENTER, 0, -20);
+  lv_obj_add_style(btn_local, &style_btn, 0);
+  lv_obj_add_style(btn_local, &style_btn_focused, LV_STATE_FOCUSED);
+  lv_obj_t *label_local = lv_label_create(btn_local);
+  lv_label_set_text(label_local, LV_SYMBOL_HOME "  LOCAL SSH");
+  lv_obj_center(label_local);
+  lv_obj_set_style_text_font(label_local, &lv_font_montserrat_18, 0);
+  lv_obj_add_event_cb(btn_local, launcher_event_cb, LV_EVENT_CLICKED,
+                      (void *)"local");
+  lv_group_add_obj(launcher_group, btn_local);
+
+  // TAILSCALE SSH BUTTON
+  lv_obj_t *btn_tail = lv_btn_create(launcher_screen);
+  lv_obj_set_size(btn_tail, 240, 60);
+  lv_obj_align(btn_tail, LV_ALIGN_CENTER, 0, 50);
+  lv_obj_add_style(btn_tail, &style_btn, 0);
+  lv_obj_add_style(btn_tail, &style_btn_focused, LV_STATE_FOCUSED);
+  lv_obj_t *label_tail = lv_label_create(btn_tail);
+  lv_label_set_text(label_tail, LV_SYMBOL_WIFI "  TAILSCALE");
+  lv_obj_center(label_tail);
+  lv_obj_set_style_text_font(label_tail, &lv_font_montserrat_18, 0);
+  lv_obj_add_event_cb(btn_tail, launcher_event_cb, LV_EVENT_CLICKED,
+                      (void *)"tailscale");
+  lv_group_add_obj(launcher_group, btn_tail);
+
+  return launcher_screen;
+}
+
+void SSHTerminal::show_launcher() {
+  in_launcher = true;
+  lv_scr_load(launcher_screen);
+}
+
+void SSHTerminal::show_terminal() {
+  in_launcher = false;
+  lv_scr_load(terminal_screen);
+}
+
+void SSHTerminal::vibrate(uint32_t ms) {
+  instance.vibrator();
+  // Simplified for now as vibrator() is usually non-blocking short pulse
+}
+
+void SSHTerminal::launcher_event_cb(lv_event_t *e) {
+  const char *type = (const char *)lv_event_get_user_data(e);
+  // This is static, but we need the instance. For now we just print.
+  // We'll handle selection in main.cpp or via global pointer.
+  Serial.printf("Launcher select: %s\n", type);
+}
+
+void SSHTerminal::save_profile(const char *type, const char *host, int port,
+                               const char *user, const char *pass) {
+  std::string key = std::string("prof_") + type;
+  preferences.begin(key.c_str(), false);
+  preferences.putString("host", host);
+  preferences.putInt("port", port);
+  preferences.putString("user", user);
+  preferences.putString("pass", pass);
+  preferences.end();
+}
+
+bool SSHTerminal::load_profile(const char *type, SSHProfile &profile) {
+  std::string key = std::string("prof_") + type;
+  preferences.begin(key.c_str(), true);
+  if (!preferences.isKey("host")) {
+    preferences.end();
+    return false;
+  }
+  profile.host = preferences.getString("host", "").c_str();
+  profile.port = preferences.getInt("port", 22);
+  profile.user = preferences.getString("user", "").c_str();
+  profile.pass = preferences.getString("pass", "").c_str();
+  preferences.end();
+  return true;
+}
+
+void SSHTerminal::connect_to_profile(const char *type) {
+  SSHProfile prof;
+  if (load_profile(type, prof)) {
+    append_text("\nConnecting to [");
+    append_text(type);
+    append_text("] Profile...\n");
+    connect(prof.host.c_str(), prof.port, prof.user.c_str(), prof.pass.c_str());
+  } else {
+    append_text("\nError: No profile saved for [");
+    append_text(type);
+    append_text("]\n");
+    append_text("Usage: save <local|tailscale> <host> <port> <user> <pass>\n");
+  }
 }
 
 bool SSHTerminal::wifi_connect(const char *ssid, const char *password) {
@@ -346,6 +487,32 @@ void SSHTerminal::handle_key_input(char key) {
         } else {
           append_text("Usage: ssh <HOST> <PORT> <USER> <PASS>\n");
         }
+      } else if (current_input.rfind("save ", 0) == 0) {
+        // Parse: save <local|tailscale> <host> <port> <user> <pass>
+        std::vector<std::string> parts;
+        size_t pos = 0;
+        std::string temp = current_input;
+        while ((pos = temp.find(' ')) != std::string::npos) {
+          parts.push_back(temp.substr(0, pos));
+          temp.erase(0, pos + 1);
+        }
+        parts.push_back(temp);
+
+        if (parts.size() >= 6) {
+          save_profile(parts[1].c_str(), parts[2].c_str(),
+                       atoi(parts[3].c_str()), parts[4].c_str(),
+                       parts[5].c_str());
+          append_text("Profile [");
+          append_text(parts[1].c_str());
+          append_text("] saved.\n");
+        } else {
+          append_text(
+              "Usage: save <local|tailscale> <host> <port> <user> <pass>\n");
+        }
+      } else if (current_input == "home") {
+        disconnect();
+        show_launcher();
+        return; // Skip history for home navigation
       } else if (current_input == "disconnect") {
         wifi_disconnect();
         append_text("WiFi disconnected.\n");
@@ -356,7 +523,9 @@ void SSHTerminal::handle_key_input(char key) {
       } else if (current_input == "help") {
         append_text("Commands:\n");
         append_text("  connect <SSID> <PASS> - Connect WiFi\n");
-        append_text("  ssh <HOST> <PORT> <USER> <PASS> - SSH\n");
+        append_text("  ssh <HOST> <PORT> <USER> <PASS> - Manual SSH\n");
+        append_text("  save <type> <H> <P> <U> <P> - Save Profile\n");
+        append_text("  home - Return to Launcher\n");
         append_text("  disconnect - Disconnect WiFi\n");
         append_text("  exit - Disconnect SSH\n");
         append_text("  clear - Clear terminal\n");

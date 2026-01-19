@@ -14,6 +14,14 @@
 #include <string>
 #include <vector>
 
+struct SSHProfile {
+  std::string host;
+  int port;
+  std::string user;
+  std::string pass;
+  bool active;
+};
+
 class SSHTerminal {
 public:
   SSHTerminal();
@@ -21,6 +29,9 @@ public:
 
   // Screen creation
   lv_obj_t *create_terminal_screen();
+  lv_obj_t *create_launcher_screen();
+  void show_launcher();
+  void show_terminal();
 
   // WiFi management
   bool wifi_connect(const char *ssid, const char *password);
@@ -35,11 +46,17 @@ public:
   // Terminal I/O
   void send_command(const char *cmd);
   void handle_key_input(char key);
-  void send_special_key(uint8_t key_code); // Ctrl+C, Tab, Esc, etc.
+  void send_special_key(uint8_t key_code);
   void append_text(const char *text);
   void clear_terminal();
 
-  // History navigation
+  // Profile Management
+  void save_profile(const char *type, const char *host, int port,
+                    const char *user, const char *pass);
+  bool load_profile(const char *type, SSHProfile &profile);
+  void connect_to_profile(const char *type);
+
+  // History & Navigation
   void navigate_history(int direction);
   void delete_current_history_entry();
 
@@ -48,8 +65,15 @@ public:
   void update_input_display();
   void flush_display_buffer();
 
+  // Hardware feedback
+  void vibrate(uint32_t ms = 50);
+
   // Tasks
   static void ssh_receive_task(void *param);
+
+  // External access for main.cpp
+  lv_group_t *get_launcher_group() { return launcher_group; }
+  bool is_in_launcher() const { return in_launcher; }
 
 private:
   // SSH session
@@ -59,6 +83,7 @@ private:
   // State
   bool wifi_connected = false;
   bool ssh_connected = false;
+  bool in_launcher = true;
 
   // Input handling
   std::string current_input;
@@ -77,10 +102,14 @@ private:
 
   // LVGL objects
   lv_obj_t *terminal_screen = nullptr;
+  lv_obj_t *launcher_screen = nullptr;
   lv_obj_t *output_label = nullptr;
   lv_obj_t *input_label = nullptr;
   lv_obj_t *status_bar = nullptr;
   lv_obj_t *byte_counter_label = nullptr;
+
+  // Groups
+  lv_group_t *launcher_group = nullptr;
 
   // Task handle
   TaskHandle_t receive_task_handle = nullptr;
@@ -90,6 +119,7 @@ private:
   void process_received_data(const char *data, size_t len);
   void load_history();
   void save_history();
+  static void launcher_event_cb(lv_event_t *e);
 };
 
 #endif // SSH_TERMINAL_H
