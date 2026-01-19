@@ -2,6 +2,8 @@
  * SSH Terminal for AVERROES Pager
  * Ported from PocketSSH (https://github.com/0015/PocketSSH)
  * Adapted for LilyGo T-LoRa-Pager hardware
+ *
+ * Theme: Cyberpunk Yellow - Vibrant Yellow on Black with White highlights
  */
 
 #include "ssh_terminal.h"
@@ -11,13 +13,22 @@
 static const char *TAG = "SSH_TERMINAL";
 static Preferences preferences;
 
-// Color definitions
-#define COLOR_BG lv_color_hex(0x000000)
-#define COLOR_FG lv_color_hex(0xFFDE00)
-#define COLOR_DIM lv_color_hex(0x333300)
-#define COLOR_GREEN lv_color_hex(0x00FF00)
-#define COLOR_RED lv_color_hex(0xFF0000)
-#define COLOR_YELLOW lv_color_hex(0xFFFF00)
+// ═══════════════════════════════════════════════════════════════════════════
+// CYBERPUNK YELLOW THEME
+// ═══════════════════════════════════════════════════════════════════════════
+#define COLOR_BG lv_color_hex(0x000000)        // Pure Black
+#define COLOR_FG lv_color_hex(0xFFDD00)        // Vibrant Yellow (primary)
+#define COLOR_HIGHLIGHT lv_color_hex(0xFFFFFF) // White (highlights)
+#define COLOR_DIM lv_color_hex(0x665500)       // Dim Yellow (muted)
+#define COLOR_ACCENT lv_color_hex(0xFFAA00)    // Orange-Yellow (accent)
+#define COLOR_SUCCESS lv_color_hex(0x00FF66)   // Neon Green
+#define COLOR_ERROR lv_color_hex(0xFF3333)     // Bright Red
+#define COLOR_WARNING lv_color_hex(0xFFFF00)   // Pure Yellow
+
+// UI Constants
+#define STATUS_BAR_HEIGHT 28
+#define INPUT_BAR_HEIGHT 32
+#define CORNER_RADIUS 0 // Sharp cyberpunk corners (or 4 for slight rounding)
 
 SSHTerminal::SSHTerminal() { load_history(); }
 
@@ -30,31 +41,56 @@ SSHTerminal::~SSHTerminal() {
 lv_obj_t *SSHTerminal::create_terminal_screen() {
   terminal_screen = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(terminal_screen, COLOR_BG, 0);
+  lv_obj_set_style_pad_all(terminal_screen, 0, 0);
 
-  // Status bar at top
-  status_bar = lv_label_create(terminal_screen);
-  lv_obj_set_width(status_bar, LV_PCT(100));
-  lv_obj_align(status_bar, LV_ALIGN_TOP_LEFT, 0, 0);
-  lv_obj_set_style_bg_color(status_bar, COLOR_DIM, 0);
-  lv_obj_set_style_bg_opa(status_bar, LV_OPA_COVER, 0);
-  lv_obj_set_style_text_color(status_bar, COLOR_FG, 0);
-  lv_obj_set_style_pad_all(status_bar, 4, 0);
+  // ═══════════════════════════════════════════════════════════════════════
+  // HEADER/STATUS BAR - Vibrant Yellow background, black text
+  // ═══════════════════════════════════════════════════════════════════════
+  lv_obj_t *header_bar = lv_obj_create(terminal_screen);
+  lv_obj_set_size(header_bar, LV_PCT(100), STATUS_BAR_HEIGHT);
+  lv_obj_align(header_bar, LV_ALIGN_TOP_LEFT, 0, 0);
+  lv_obj_set_style_bg_color(header_bar, COLOR_FG, 0);
+  lv_obj_set_style_bg_opa(header_bar, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(header_bar, 0, 0);
+  lv_obj_set_style_radius(header_bar, 0, 0);
+  lv_obj_set_style_pad_hor(header_bar, 8, 0);
+  lv_obj_set_style_pad_ver(header_bar, 4, 0);
+  lv_obj_clear_flag(header_bar, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Title label (left side)
+  lv_obj_t *title_label = lv_label_create(header_bar);
+  lv_obj_set_style_text_color(title_label, COLOR_BG, 0);
+  lv_obj_set_style_text_font(title_label, &lv_font_montserrat_14, 0);
+  lv_label_set_text(title_label, LV_SYMBOL_HOME " AVERROES SSH");
+  lv_obj_align(title_label, LV_ALIGN_LEFT_MID, 0, 0);
+
+  // Status indicator (right side)
+  status_bar = lv_label_create(header_bar);
+  lv_obj_set_style_text_color(status_bar, COLOR_BG, 0);
+  lv_obj_set_style_text_font(status_bar, &lv_font_montserrat_14, 0);
   lv_label_set_text(status_bar, LV_SYMBOL_WIFI " OFF");
+  lv_obj_align(status_bar, LV_ALIGN_RIGHT_MID, 0, 0);
 
-  // Byte counter
-  byte_counter_label = lv_label_create(terminal_screen);
-  lv_obj_align(byte_counter_label, LV_ALIGN_TOP_RIGHT, -4, 4);
-  lv_obj_set_style_text_color(byte_counter_label, COLOR_DIM, 0);
-  lv_label_set_text(byte_counter_label, "0 B");
+  // Byte counter (next to status)
+  byte_counter_label = lv_label_create(header_bar);
+  lv_obj_set_style_text_color(byte_counter_label, COLOR_BG, 0);
+  lv_obj_set_style_text_font(byte_counter_label, &lv_font_montserrat_12, 0);
+  lv_label_set_text(byte_counter_label, "");
+  lv_obj_align(byte_counter_label, LV_ALIGN_RIGHT_MID, -80, 0);
 
-  // Output area (scrollable)
+  // ═══════════════════════════════════════════════════════════════════════
+  // OUTPUT AREA - Main terminal content, scrollable
+  // ═══════════════════════════════════════════════════════════════════════
   lv_obj_t *output_container = lv_obj_create(terminal_screen);
-  lv_obj_set_size(output_container, LV_PCT(100), LV_PCT(80));
-  lv_obj_align(output_container, LV_ALIGN_TOP_LEFT, 0, 24);
+  lv_obj_set_pos(output_container, 0, STATUS_BAR_HEIGHT);
+  lv_obj_set_size(output_container, LV_PCT(100),
+                  lv_pct(100) - STATUS_BAR_HEIGHT - INPUT_BAR_HEIGHT - 8);
   lv_obj_set_style_bg_color(output_container, COLOR_BG, 0);
   lv_obj_set_style_border_width(output_container, 0, 0);
-  lv_obj_set_style_pad_all(output_container, 4, 0);
+  lv_obj_set_style_radius(output_container, 0, 0);
+  lv_obj_set_style_pad_all(output_container, 8, 0);
   lv_obj_set_scroll_dir(output_container, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(output_container, LV_SCROLLBAR_MODE_AUTO);
 
   output_label = lv_label_create(output_container);
   lv_obj_set_width(output_label, LV_PCT(100));
@@ -63,15 +99,35 @@ lv_obj_t *SSHTerminal::create_terminal_screen() {
   lv_label_set_long_mode(output_label, LV_LABEL_LONG_WRAP);
   lv_label_set_text(output_label, "");
 
-  // Input line at bottom
-  input_label = lv_label_create(terminal_screen);
-  lv_obj_set_width(input_label, LV_PCT(100));
-  lv_obj_align(input_label, LV_ALIGN_BOTTOM_LEFT, 4, -4);
-  lv_obj_set_style_bg_color(input_label, COLOR_DIM, 0);
-  lv_obj_set_style_bg_opa(input_label, LV_OPA_COVER, 0);
-  lv_obj_set_style_text_color(input_label, COLOR_FG, 0);
+  // ═══════════════════════════════════════════════════════════════════════
+  // INPUT BAR - Bottom command line, white text on dim background
+  // ═══════════════════════════════════════════════════════════════════════
+  lv_obj_t *input_bar = lv_obj_create(terminal_screen);
+  lv_obj_set_size(input_bar, LV_PCT(100), INPUT_BAR_HEIGHT);
+  lv_obj_align(input_bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+  lv_obj_set_style_bg_color(input_bar, COLOR_DIM, 0);
+  lv_obj_set_style_bg_opa(input_bar, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(input_bar, COLOR_FG, 0);
+  lv_obj_set_style_border_width(input_bar, 2, 0);
+  lv_obj_set_style_border_side(input_bar, LV_BORDER_SIDE_TOP, 0);
+  lv_obj_set_style_radius(input_bar, 0, 0);
+  lv_obj_set_style_pad_hor(input_bar, 8, 0);
+  lv_obj_set_style_pad_ver(input_bar, 4, 0);
+  lv_obj_clear_flag(input_bar, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Prompt symbol
+  lv_obj_t *prompt_label = lv_label_create(input_bar);
+  lv_obj_set_style_text_color(prompt_label, COLOR_FG, 0);
+  lv_obj_set_style_text_font(prompt_label, &lv_font_montserrat_16, 0);
+  lv_label_set_text(prompt_label, ">");
+  lv_obj_align(prompt_label, LV_ALIGN_LEFT_MID, 0, 0);
+
+  // Input text (white for visibility)
+  input_label = lv_label_create(input_bar);
+  lv_obj_set_style_text_color(input_label, COLOR_HIGHLIGHT, 0); // White!
   lv_obj_set_style_text_font(input_label, &lv_font_montserrat_14, 0);
-  lv_label_set_text(input_label, "> |");
+  lv_label_set_text(input_label, "|");
+  lv_obj_align(input_label, LV_ALIGN_LEFT_MID, 16, 0);
 
   return terminal_screen;
 }
@@ -422,15 +478,19 @@ void SSHTerminal::update_status_bar() {
 
   std::string status;
 
+  // Status bar is on yellow header, so we use black text + colored symbols
+  // concept For visibility, we keep status text black but add colored
+  // indicators
   if (!wifi_connected) {
     status = LV_SYMBOL_WIFI " OFF";
-    lv_obj_set_style_text_color(status_bar, COLOR_RED, 0);
+    // Red indicator on header (change bg color temporarily? No, just text)
+    lv_obj_set_style_text_color(status_bar, COLOR_ERROR, 0);
   } else if (!ssh_connected) {
-    status = LV_SYMBOL_WIFI " | " LV_SYMBOL_CLOSE " SSH";
-    lv_obj_set_style_text_color(status_bar, COLOR_YELLOW, 0);
+    status = LV_SYMBOL_WIFI " OK | " LV_SYMBOL_CLOSE " SSH";
+    lv_obj_set_style_text_color(status_bar, COLOR_BG, 0); // Black on yellow
   } else {
-    status = LV_SYMBOL_WIFI " | " LV_SYMBOL_OK " SSH";
-    lv_obj_set_style_text_color(status_bar, COLOR_GREEN, 0);
+    status = LV_SYMBOL_WIFI " OK | " LV_SYMBOL_OK " SSH";
+    lv_obj_set_style_text_color(status_bar, COLOR_BG, 0); // Black on yellow
   }
 
   lv_label_set_text(status_bar, status.c_str());
@@ -444,11 +504,11 @@ void SSHTerminal::update_input_display() {
     cursor_pos = current_input.length();
   }
 
-  std::string display = "> " + current_input;
+  // Input text only (prompt is separate now)
+  std::string display = current_input;
 
   if (cursor_visible) {
-    size_t display_pos = 2 + cursor_pos;
-    display.insert(display_pos, "|");
+    display.insert(cursor_pos, "|");
   }
 
   lv_label_set_text(input_label, display.c_str());
