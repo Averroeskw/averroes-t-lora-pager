@@ -298,10 +298,14 @@ void SSHTerminal::update_status_bar() {
   instance.gauge.refresh();
   float volt = instance.gauge.getVoltage() / 1000.0;
   int percent = instance.gauge.getStateOfCharge();
+  const char *wifi_status = wifi_connected ? "ONLINE" : "OFFLINE";
+  if (is_connecting)
+    wifi_status = "BUSY...";
+
   snprintf(buf, sizeof(buf),
            "#FFD700 " LV_SYMBOL_BATTERY_3
            " %d%% (%.2fV) #  #00FF00 " LV_SYMBOL_WIFI " %s #",
-           percent, volt, wifi_connected ? "ONLINE" : "OFFLINE");
+           percent, volt, wifi_status);
   lv_label_set_text(status_bar, buf);
   lvgl_unlock();
 }
@@ -327,9 +331,11 @@ void SSHTerminal::launcher_event_cb(lv_event_t *e) {
   const char *type = (const char *)lv_event_get_user_data(e);
   lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
   if (ssht_instance) {
+    lvgl_lock();
     ssht_instance->trigger_glitch(lv_scr_act()); // Glitch the whole screen!
     ssht_instance->vibrate(60);
     ssht_instance->connect_to_profile(type);
+    lvgl_unlock();
   }
 }
 
@@ -417,22 +423,28 @@ bool SSHTerminal::load_profile(const char *type, SSHProfile &profile) {
 }
 
 void SSHTerminal::connect_to_profile(const char *type) {
-  // Use background task for smoothness!
-  if (connection_task_handle) {
-    // Check if task is actually still running
-    eTaskState state = eTaskGetState(connection_task_handle);
-    if (state != eDeleted) {
-      vTaskDelete(connection_task_handle);
-    }
-    connection_task_handle = nullptr;
+  if (is_connecting) {
+    append_text("[BUSY] Connection in progress...\n");
+    return;
   }
+
+  if (ssh_connected) {
+    append_text("[INFO] Already connected. Type 'exit' first.\n");
+    return;
+  }
+
+  is_connecting = true;
+  vibrate(100);
 
   // Use a heap-allocated copy to pass to the task safely
   char *task_type = strdup(type);
-  if (!task_type)
+  if (!task_type) {
+    is_connecting = false;
     return;
+  }
 
-  xTaskCreate(connection_task, "ssh_connect", 8192, (void *)task_type, 5,
+  // Increase stack to 16KB for stable SSH negotiation
+  xTaskCreate(connection_task, "ssh_connect", 1024 * 16, (void *)task_type, 5,
               &connection_task_handle);
 }
 
@@ -451,6 +463,7 @@ void SSHTerminal::connection_task(void *param) {
     if (!ui->wifi_connected) {
       if (!ui->wifi_auto_connect()) {
         ui->append_text("[ERROR] Link Offline. Check WiFi.\n");
+        ui->is_connecting = false;
         vTaskDelete(NULL);
         return;
       }
@@ -459,16 +472,23 @@ void SSHTerminal::connection_task(void *param) {
     if (type == "remote") {
       if (!ui->wg_connect()) {
         ui->append_text("[ERROR] Tunnel Failure. Aborting.\n");
+        ui->is_connecting = false;
         vTaskDelete(NULL);
         return;
       }
     }
 
     ui->append_text("Negotiating SSH Handshake...\n");
-    ui->connect(prof.host.c_str(), prof.port, prof.user.c_str(),
-                prof.pass.c_str());
+    bool success = ui->connect(prof.host.c_str(), prof.port, prof.user.c_str(),
+                               prof.pass.c_str());
+    if (!success) {
+      ui->append_text("[ERROR] SSH Negotiation Failed.\n");
+    }
+  } else {
+    ui->append_text("[ERROR] Profile Not Found.\n");
   }
 
+  ui->is_connecting = false;
   vTaskDelete(NULL);
 }
 
@@ -702,16 +722,17 @@ bool SSHTerminal::connect(const char *host, int port, const char *user,
   update_status_bar();
 
   // Start receive task
-  xTaskCreate(ssh_receive_task, "ssh_rx", 8192, this, 5, &receive_task_handle);
+  run_receive_task = true;
+  xTaskCreate(ssh_receive_task, "ssh_rx", 1024 * 16, this, 5,
+              &receive_task_handle);
 
   return true;
 }
 
 void SSHTerminal::disconnect() {
-  if (receive_task_handle) {
-    vTaskDelete(receive_task_handle);
-    receive_task_handle = nullptr;
-  }
+  run_receive_task = false;       // Signal receive task to exit
+  vTaskDelay(pdMS_TO_TICKS(100)); // Give it time to exit gracefully
+  receive_task_handle = nullptr;
 
   if (channel) {
     ssh_channel_close(channel);
@@ -913,21 +934,23 @@ void SSHTerminal::ssh_receive_task(void *param) {
   SSHTerminal *terminal = (SSHTerminal *)param;
   char buffer[4096];
 
-  while (terminal->ssh_connected && terminal->channel) {
+  while (terminal->run_receive_task && terminal->ssh_connected &&
+         terminal->channel) {
     int nbytes = ssh_channel_read_nonblocking(terminal->channel, buffer,
                                               sizeof(buffer) - 1, 0);
 
     if (nbytes > 0) {
       buffer[nbytes] = '\0';
       terminal->process_received_data(buffer, nbytes);
-    } else if (nbytes == SSH_ERROR || ssh_channel_is_eof(terminal->channel)) {
+    } else if (nbytes == SSH_ERROR ||
+               (terminal->channel && ssh_channel_is_eof(terminal->channel))) {
       break;
     }
 
     vTaskDelay(pdMS_TO_TICKS(10));
   }
 
-  terminal->disconnect();
+  terminal->run_receive_task = false;
   vTaskDelete(NULL);
 }
 

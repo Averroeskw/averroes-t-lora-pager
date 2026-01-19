@@ -82,6 +82,7 @@ static const LilyGoKeyboardConfigure_t myKeyboardConfig = {
 // Keyboard callback for characters
 void onKeyPress(int state, char &c) {
   if (state == 1 && sshTerminal) { // KB_PRESSED
+    lvgl_lock();
     // Haptic feedback
     instance.setHapticEffects(1);
     instance.vibrator();
@@ -89,6 +90,7 @@ void onKeyPress(int state, char &c) {
     // Pass to SSH Terminal
     Serial.printf("[KEY] %c (0x%02X)\n", c, c);
     sshTerminal->handle_key_input(c);
+    lvgl_unlock();
   }
 }
 
@@ -163,15 +165,19 @@ void loop() {
     instance.vibrator();
 
     if (sshTerminal->is_in_launcher()) {
+      lvgl_lock();
       // Navigate launcher buttons
       lv_group_t *g = sshTerminal->get_launcher_group();
       if (delta > 0)
         lv_group_focus_next(g);
       else
         lv_group_focus_prev(g);
+      lvgl_unlock();
     } else {
+      lvgl_lock();
       // Navigate history in terminal - allow proportional scrolling
       sshTerminal->navigate_history(delta);
+      lvgl_unlock();
     }
   }
 
@@ -191,6 +197,7 @@ void loop() {
     } else {
       // Released
       if (!longPressHandled && sshTerminal) {
+        lvgl_lock();
         if (sshTerminal->is_in_launcher()) {
           // Select current profile
           lv_group_t *g = sshTerminal->get_launcher_group();
@@ -204,6 +211,7 @@ void loop() {
           // Send Enter to terminal
           sshTerminal->handle_key_input('\n');
         }
+        lvgl_unlock();
         instance.setHapticEffects(7);
         instance.vibrator();
       }
@@ -214,7 +222,9 @@ void loop() {
   if (isPressed && !longPressHandled && !sshTerminal->is_in_launcher() &&
       (now - buttonPressStart) > LONG_PRESS_MS) {
     longPressHandled = true;
+    lvgl_lock();
     sshTerminal->delete_current_history_entry();
+    lvgl_unlock();
     instance.setHapticEffects(14);
     instance.vibrator();
   }
