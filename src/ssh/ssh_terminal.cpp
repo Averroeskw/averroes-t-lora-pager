@@ -191,7 +191,17 @@ lv_obj_t *SSHTerminal::create_launcher_screen() {
   lv_obj_set_style_text_font(label_local, &lv_font_montserrat_18, 0);
   lv_obj_add_event_cb(btn_local, launcher_event_cb, LV_EVENT_CLICKED,
                       (void *)"local");
+  lv_obj_set_user_data(btn_local, (void *)"local");
   lv_group_add_obj(launcher_group, btn_local);
+
+  // Check if profile exists and add indicator
+  SSHProfile tempProf;
+  if (load_profile("local", tempProf)) {
+    lv_obj_t *ind = lv_label_create(btn_local);
+    lv_label_set_text(ind, LV_SYMBOL_OK);
+    lv_obj_set_style_text_color(ind, COLOR_SUCCESS, 0);
+    lv_obj_align(ind, LV_ALIGN_RIGHT_MID, -10, 0);
+  }
 
   // TAILSCALE SSH BUTTON
   lv_obj_t *btn_tail = lv_btn_create(launcher_screen);
@@ -205,7 +215,15 @@ lv_obj_t *SSHTerminal::create_launcher_screen() {
   lv_obj_set_style_text_font(label_tail, &lv_font_montserrat_18, 0);
   lv_obj_add_event_cb(btn_tail, launcher_event_cb, LV_EVENT_CLICKED,
                       (void *)"tailscale");
+  lv_obj_set_user_data(btn_tail, (void *)"tailscale");
   lv_group_add_obj(launcher_group, btn_tail);
+
+  if (load_profile("tailscale", tempProf)) {
+    lv_obj_t *ind = lv_label_create(btn_tail);
+    lv_label_set_text(ind, LV_SYMBOL_OK);
+    lv_obj_set_style_text_color(ind, COLOR_SUCCESS, 0);
+    lv_obj_align(ind, LV_ALIGN_RIGHT_MID, -10, 0);
+  }
 
   return launcher_screen;
 }

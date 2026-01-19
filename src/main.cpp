@@ -142,8 +142,8 @@ void loop() {
   if (delta != 0 && sshTerminal) {
     lastEncPos = pos;
 
-    // Haptic feedback for every tick
-    instance.setHapticEffects(3);
+    // Haptic feedback - use effect 1 (strong click) for snappiness
+    instance.setHapticEffects(1);
     instance.vibrator();
 
     if (sshTerminal->is_in_launcher()) {
@@ -154,8 +154,8 @@ void loop() {
       else
         lv_group_focus_prev(g);
     } else {
-      // Navigate history in terminal
-      sshTerminal->navigate_history(delta > 0 ? 1 : -1);
+      // Navigate history in terminal - allow proportional scrolling
+      sshTerminal->navigate_history(delta);
     }
   }
 
