@@ -12,6 +12,7 @@
 #include <Preferences.h>
 #include <WiFi.h>
 #include <WireGuard-ESP32.h>
+#include <atomic>
 #include <libssh/libssh.h>
 #include <lvgl.h>
 #include <string>
@@ -109,6 +110,8 @@ private:
   bool wifi_connected = false;
   bool ssh_connected = false;
   bool in_launcher = true;
+  std::atomic<bool> is_connecting = {false};
+  std::atomic<bool> run_receive_task = {false};
 
   // Input handling
   std::string current_input;
