@@ -8,17 +8,33 @@
 #define SSH_TERMINAL_H
 
 #include <Arduino.h>
+#include <LilyGoLib.h>
+#include <Preferences.h>
 #include <WiFi.h>
+#include <WireGuard-ESP32.h>
 #include <libssh/libssh.h>
 #include <lvgl.h>
 #include <string>
 #include <vector>
+
+// Global LVGL thread safety (defined in main.cpp)
+extern void lvgl_lock();
+extern void lvgl_unlock();
 
 struct SSHProfile {
   std::string host;
   int port;
   std::string user;
   std::string pass;
+  bool active;
+};
+
+struct WireGuardConfig {
+  std::string private_key;
+  std::string remote_public_key;
+  std::string endpoint;
+  std::string local_ip;
+  int port;
   bool active;
 };
 
@@ -33,8 +49,16 @@ public:
   void show_launcher();
   void show_terminal();
 
+  // WireGuard management
+  bool wg_connect();
+  void wg_disconnect();
+  void save_wg_config(const char *private_key, const char *public_key,
+                      const char *endpoint, const char *local_ip);
+  bool load_wg_config(WireGuardConfig &config);
+
   // WiFi management
   bool wifi_connect(const char *ssid, const char *password);
+  bool wifi_auto_connect();
   void wifi_disconnect();
   bool is_wifi_connected() const { return wifi_connected; }
 
@@ -70,6 +94,7 @@ public:
 
   // Tasks
   static void ssh_receive_task(void *param);
+  static void connection_task(void *param);
 
   // External access for main.cpp
   lv_group_t *get_launcher_group() { return launcher_group; }
@@ -111,15 +136,22 @@ private:
   // Groups
   lv_group_t *launcher_group = nullptr;
 
-  // Task handle
+  // Task handles
   TaskHandle_t receive_task_handle = nullptr;
+  TaskHandle_t connection_task_handle = nullptr;
+  WireGuard wg;
 
+  static SSHTerminal *ssht_instance;
   // Helper methods
   std::string strip_ansi_codes(const char *data, size_t len);
   void process_received_data(const char *data, size_t len);
   void load_history();
   void save_history();
   static void launcher_event_cb(lv_event_t *e);
+  static void btn_pulse_anim_cb(void *var, int32_t v);
+  static void glitch_anim_cb(void *var, int32_t v);
+  static void grid_scroll_anim_cb(void *var, int32_t v);
+  void trigger_glitch(lv_obj_t *obj);
 };
 
 #endif // SSH_TERMINAL_H

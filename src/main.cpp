@@ -18,6 +18,18 @@
 // Global SSH Terminal instance
 static SSHTerminal *sshTerminal = nullptr;
 static lv_obj_t *terminalScreen = nullptr;
+SemaphoreHandle_t lvgl_mutex = NULL;
+
+// Global lock wrappers for cross-file use
+void lvgl_lock() {
+  if (lvgl_mutex)
+    xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
+}
+
+void lvgl_unlock() {
+  if (lvgl_mutex)
+    xSemaphoreGive(lvgl_mutex);
+}
 
 // Encoder state (interrupt-driven)
 static volatile int encPos = 0;
@@ -84,6 +96,9 @@ void setup() {
   Serial.begin(115200);
   Serial.println("AVERROES SSH TERMINAL BOOTING...");
 
+  // Create LVGL mutex for thread safety
+  lvgl_mutex = xSemaphoreCreateRecursiveMutex();
+
   // Initialize LilyGoLib
   instance.begin();
 
@@ -112,15 +127,16 @@ void setup() {
   // Start with launcher screen
   sshTerminal->show_launcher();
 
+  // Auto-connect to WiFi if credentials exist
+  sshTerminal->wifi_auto_connect();
+
   // Display startup message (will be visible when user enters terminal)
   sshTerminal->append_text("═══════════════════════════════════════\n");
-  sshTerminal->append_text("  AVERROES SSH Terminal v2.1\n");
-  sshTerminal->append_text("  Secure Shell Client for ESP32\n");
-  sshTerminal->append_text("═══════════════════════════════════════\n\n");
-  sshTerminal->append_text("Quick Start:\n");
-  sshTerminal->append_text("  1. connect <WiFi> <Pass>\n");
-  sshTerminal->append_text("  2. save local <host> <port> <user> <pass>\n");
-  sshTerminal->append_text("  3. home - goes back to launcher\n\n");
+  sshTerminal->append_text("AVERROES POCKET SSH v2.7 Elite Ultra\n");
+  sshTerminal->append_text("Infinity Wireframe / BG-Sync Active\n");
+  sshTerminal->append_text("------------------------------------\n");
+  sshTerminal->append_text("Mode: PLUG & PLAY (Handcoded Fallback)\n");
+  sshTerminal->append_text("Tip: Use encoder to scroll history.\n");
   sshTerminal->update_status_bar();
 
   // Hardware interrupts for encoder
@@ -210,7 +226,9 @@ void loop() {
     sshTerminal->update_status_bar();
   }
 
-  // Process LVGL tasks
+  // Process LVGL tasks with mutex protection
+  lvgl_lock();
   lv_timer_handler();
+  lvgl_unlock();
   delay(5);
 }

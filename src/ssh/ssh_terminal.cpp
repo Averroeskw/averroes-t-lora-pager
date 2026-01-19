@@ -10,10 +10,11 @@
 #include <LilyGoLib.h>
 #include <Preferences.h>
 #include <esp_timer.h>
+#include <stdlib.h>
 
 static const char *TAG = "SSH_TERMINAL";
 static Preferences preferences;
-static SSHTerminal *ssht_instance = nullptr;
+SSHTerminal *SSHTerminal::ssht_instance = nullptr;
 
 // Access to the global LilyGo instance for vibration
 extern LilyGoLoRaPager &instance;
@@ -29,11 +30,12 @@ extern LilyGoLoRaPager &instance;
 #define COLOR_SUCCESS lv_color_hex(0x00FF66)   // Neon Green
 #define COLOR_ERROR lv_color_hex(0xFF3333)     // Bright Red
 #define COLOR_WARNING lv_color_hex(0xFFFF00)   // Pure Yellow
+#define COLOR_SHELL lv_color_hex(0x00FFB3)     // Matrix Green/Cyan
 
 // UI Constants
 #define STATUS_BAR_HEIGHT 28
 #define INPUT_BAR_HEIGHT 32
-#define CORNER_RADIUS 0 // Sharp cyberpunk corners (or 4 for slight rounding)
+#define CORNER_RADIUS 8 // Rounded corners for premium feel
 
 SSHTerminal::SSHTerminal() {
   ssht_instance = this;
@@ -144,98 +146,176 @@ lv_obj_t *SSHTerminal::create_launcher_screen() {
   launcher_screen = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(launcher_screen, COLOR_BG, 0);
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // TITLE - Large yellow text
-  // ═══════════════════════════════════════════════════════════════════════
+  // 1. INFINITY WIREFRAME GRID (Base Layer)
+  lv_obj_t *grid_container = lv_obj_create(launcher_screen);
+  lv_obj_set_size(grid_container, 240, 320);
+  lv_obj_align(grid_container, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_bg_opa(grid_container, 0, 0);
+  lv_obj_set_style_border_width(grid_container, 0, 0);
+  lv_obj_clear_flag(grid_container, LV_OBJ_FLAG_SCROLLABLE);
+
+  for (int i = 0; i < 15; i++) {
+    lv_obj_t *line = lv_obj_create(grid_container);
+    lv_obj_set_size(line, 240, 1);
+    lv_obj_set_style_bg_color(line, COLOR_FG, 0);
+    lv_obj_set_style_bg_opa(line, 12, 0);
+    lv_obj_set_style_border_width(line, 0, 0);
+
+    lv_anim_t a_grid;
+    lv_anim_init(&a_grid);
+    lv_anim_set_var(&a_grid, line);
+    lv_anim_set_exec_cb(&a_grid, (lv_anim_exec_xcb_t)grid_scroll_anim_cb);
+    lv_anim_set_values(&a_grid, 0, 320);
+    lv_anim_set_time(&a_grid, 5000);
+    lv_anim_set_delay(&a_grid, i * 333);
+    lv_anim_set_repeat_count(&a_grid, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&a_grid);
+  }
+
+  // 2. VIGNETTE EFFECT (Second Layer)
+  lv_obj_t *vignette = lv_obj_create(launcher_screen);
+  lv_obj_set_size(vignette, 240, 320);
+  lv_obj_set_style_bg_opa(vignette, 0, 0);
+  lv_obj_set_style_border_width(vignette, 0, 0);
+  lv_obj_set_style_shadow_width(vignette, 120, 0);
+  lv_obj_set_style_shadow_color(vignette, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_shadow_opa(vignette, 255, 0);
+  // lv_obj_set_style_shadow_spread(vignette, 10, 0);
+  lv_obj_add_flag(vignette, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  lv_obj_set_ext_click_area(vignette, 0);
+
+  // 3. UI TITLES
   lv_obj_t *title = lv_label_create(launcher_screen);
   lv_obj_set_style_text_color(title, COLOR_FG, 0);
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
   lv_label_set_text(title, "AVERROES SSH");
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 35);
 
   lv_obj_t *subtitle = lv_label_create(launcher_screen);
   lv_obj_set_style_text_color(subtitle, COLOR_DIM, 0);
   lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_12, 0);
-  lv_label_set_text(subtitle, "SELECT CONNECTION TYPE");
-  lv_obj_align(subtitle, LV_ALIGN_TOP_MID, 0, 50);
+  lv_label_set_text(subtitle, "ELITE v2.7 READY");
+  lv_obj_align(subtitle, LV_ALIGN_TOP_MID, 0, 65);
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // BUTTONS - Large, navigable
-  // ═══════════════════════════════════════════════════════════════════════
+  // 4. NAVIGATION GROUP & STYLES
   launcher_group = lv_group_create();
 
-  // Button Style
-  static lv_style_t style_btn;
+  static lv_style_transition_dsc_t trans_btn;
+  static lv_style_prop_t trans_props[] = {LV_STYLE_BORDER_WIDTH,
+                                          LV_STYLE_BORDER_COLOR,
+                                          LV_STYLE_SHADOW_WIDTH,
+                                          LV_STYLE_TEXT_COLOR,
+                                          LV_STYLE_TRANSFORM_SCALE_X,
+                                          LV_STYLE_TRANSFORM_SCALE_Y,
+                                          0};
+  lv_style_transition_dsc_init(&trans_btn, trans_props, lv_anim_path_ease_out,
+                               200, 0, NULL);
+
+  static lv_style_t style_btn, style_btn_focused;
   lv_style_init(&style_btn);
   lv_style_set_bg_color(&style_btn, COLOR_BG);
+  lv_style_set_bg_opa(&style_btn, 180);
   lv_style_set_border_color(&style_btn, COLOR_DIM);
-  lv_style_set_border_width(&style_btn, 2);
-  lv_style_set_text_color(&style_btn, COLOR_FG);
-  lv_style_set_radius(&style_btn, 4);
+  lv_style_set_border_width(&style_btn, 1);
+  lv_style_set_radius(&style_btn, CORNER_RADIUS);
+  lv_style_set_text_color(&style_btn, COLOR_DIM);
+  lv_style_set_transition(&style_btn, &trans_btn);
 
-  static lv_style_t style_btn_focused;
   lv_style_init(&style_btn_focused);
-  lv_style_set_bg_color(&style_btn_focused, COLOR_FG);
-  lv_style_set_border_color(&style_btn_focused, COLOR_HIGHLIGHT);
-  lv_style_set_text_color(&style_btn_focused, COLOR_BG);
+  lv_style_set_border_color(&style_btn_focused, COLOR_FG);
+  lv_style_set_border_width(&style_btn_focused, 4);
+  lv_style_set_shadow_color(&style_btn_focused, COLOR_FG);
+  lv_style_set_shadow_width(&style_btn_focused, 30);
+  lv_style_set_shadow_opa(&style_btn_focused, 220);
+  lv_style_set_text_color(&style_btn_focused, COLOR_HIGHLIGHT);
+  lv_style_set_transform_scale(&style_btn_focused, 285);
 
-  // LOCAL SSH BUTTON
+  // 5. BUTTONS
   lv_obj_t *btn_local = lv_btn_create(launcher_screen);
-  lv_obj_set_size(btn_local, 240, 60);
-  lv_obj_align(btn_local, LV_ALIGN_CENTER, 0, -20);
+  lv_obj_set_size(btn_local, 230, 65);
+  lv_obj_align(btn_local, LV_ALIGN_CENTER, 0, -5);
   lv_obj_add_style(btn_local, &style_btn, 0);
   lv_obj_add_style(btn_local, &style_btn_focused, LV_STATE_FOCUSED);
   lv_obj_t *label_local = lv_label_create(btn_local);
-  lv_label_set_text(label_local, LV_SYMBOL_HOME "  LOCAL SSH");
+  lv_label_set_text(label_local, LV_SYMBOL_HOME "  LOCAL SESSION");
   lv_obj_center(label_local);
-  lv_obj_set_style_text_font(label_local, &lv_font_montserrat_18, 0);
   lv_obj_add_event_cb(btn_local, launcher_event_cb, LV_EVENT_CLICKED,
                       (void *)"local");
-  lv_obj_set_user_data(btn_local, (void *)"local");
   lv_group_add_obj(launcher_group, btn_local);
 
-  // Check if profile exists and add indicator
-  SSHProfile tempProf;
-  if (load_profile("local", tempProf)) {
-    lv_obj_t *ind = lv_label_create(btn_local);
-    lv_label_set_text(ind, LV_SYMBOL_OK);
-    lv_obj_set_style_text_color(ind, COLOR_SUCCESS, 0);
-    lv_obj_align(ind, LV_ALIGN_RIGHT_MID, -10, 0);
+  lv_obj_t *btn_remote = lv_btn_create(launcher_screen);
+  lv_obj_set_size(btn_remote, 230, 65);
+  lv_obj_align(btn_remote, LV_ALIGN_CENTER, 0, 75);
+  lv_obj_add_style(btn_remote, &style_btn, 0);
+  lv_obj_add_style(btn_remote, &style_btn_focused, LV_STATE_FOCUSED);
+  lv_obj_t *label_remote = lv_label_create(btn_remote);
+  lv_label_set_text(label_remote, LV_SYMBOL_WIFI "  REMOTE TUNNEL");
+  lv_obj_center(label_remote);
+  lv_obj_add_event_cb(btn_remote, launcher_event_cb, LV_EVENT_CLICKED,
+                      (void *)"remote");
+  lv_group_add_obj(launcher_group, btn_remote);
+
+  // 6. CRT OVERLAY (Top Layer)
+  for (int i = 0; i < 320; i += 3) {
+    lv_obj_t *scanline = lv_obj_create(launcher_screen);
+    lv_obj_set_size(scanline, 240, 1);
+    lv_obj_align(scanline, LV_ALIGN_TOP_MID, 0, i);
+    lv_obj_set_style_bg_color(scanline, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(scanline, 35, 0);
+    lv_obj_set_style_border_width(scanline, 0, 0);
+    lv_obj_add_flag(scanline, LV_OBJ_FLAG_IGNORE_LAYOUT);
   }
-
-  // TAILSCALE SSH BUTTON
-  lv_obj_t *btn_tail = lv_btn_create(launcher_screen);
-  lv_obj_set_size(btn_tail, 240, 60);
-  lv_obj_align(btn_tail, LV_ALIGN_CENTER, 0, 50);
-  lv_obj_add_style(btn_tail, &style_btn, 0);
-  lv_obj_add_style(btn_tail, &style_btn_focused, LV_STATE_FOCUSED);
-  lv_obj_t *label_tail = lv_label_create(btn_tail);
-  lv_label_set_text(label_tail, LV_SYMBOL_WIFI "  TAILSCALE");
-  lv_obj_center(label_tail);
-  lv_obj_set_style_text_font(label_tail, &lv_font_montserrat_18, 0);
-  lv_obj_add_event_cb(btn_tail, launcher_event_cb, LV_EVENT_CLICKED,
-                      (void *)"tailscale");
-  lv_obj_set_user_data(btn_tail, (void *)"tailscale");
-  lv_group_add_obj(launcher_group, btn_tail);
-
-  if (load_profile("tailscale", tempProf)) {
-    lv_obj_t *ind = lv_label_create(btn_tail);
-    lv_label_set_text(ind, LV_SYMBOL_OK);
-    lv_obj_set_style_text_color(ind, COLOR_SUCCESS, 0);
-    lv_obj_align(ind, LV_ALIGN_RIGHT_MID, -10, 0);
-  }
-
   return launcher_screen;
 }
 
 void SSHTerminal::show_launcher() {
+  lvgl_lock();
   in_launcher = true;
   lv_scr_load(launcher_screen);
+  lvgl_unlock();
 }
 
 void SSHTerminal::show_terminal() {
+  lv_group_focus_obj(output_label); // Focus terminal output for scrolling
+  lvgl_lock();
   in_launcher = false;
   lv_scr_load(terminal_screen);
+  lvgl_unlock();
+}
+
+void SSHTerminal::append_text(const char *text) {
+  lvgl_lock();
+  lv_label_set_text(output_label, text);
+  // Custom scrolling behavior for label if needed,
+  // but usually it's inside a container.
+  lvgl_unlock();
+}
+
+void SSHTerminal::update_status_bar() {
+  lvgl_lock();
+  char buf[64];
+  // Refresh and get battery info from the fuel gauge
+  instance.gauge.refresh();
+  float volt = instance.gauge.getVoltage() / 1000.0;
+  int percent = instance.gauge.getStateOfCharge();
+  snprintf(buf, sizeof(buf),
+           "#FFD700 " LV_SYMBOL_BATTERY_3
+           " %d%% (%.2fV) #  #00FF00 " LV_SYMBOL_WIFI " %s #",
+           percent, volt, wifi_connected ? "ONLINE" : "OFFLINE");
+  lv_label_set_text(status_bar, buf);
+  lvgl_unlock();
+}
+
+void SSHTerminal::update_input_display() {
+  lvgl_lock();
+  lv_label_set_text(input_label, ("> " + current_input).c_str());
+  lvgl_unlock();
+}
+
+void SSHTerminal::clear_terminal() {
+  lvgl_lock();
+  lv_label_set_text(output_label, "");
+  lvgl_unlock();
 }
 
 void SSHTerminal::vibrate(uint32_t ms) {
@@ -245,9 +325,51 @@ void SSHTerminal::vibrate(uint32_t ms) {
 
 void SSHTerminal::launcher_event_cb(lv_event_t *e) {
   const char *type = (const char *)lv_event_get_user_data(e);
-  // This is static, but we need the instance. For now we just print.
-  // We'll handle selection in main.cpp or via global pointer.
-  Serial.printf("Launcher select: %s\n", type);
+  lv_obj_t *obj = (lv_obj_t *)lv_event_get_target(e);
+  if (ssht_instance) {
+    ssht_instance->trigger_glitch(lv_scr_act()); // Glitch the whole screen!
+    ssht_instance->vibrate(60);
+    ssht_instance->connect_to_profile(type);
+  }
+}
+
+void SSHTerminal::save_wg_config(const char *private_key,
+                                 const char *public_key, const char *endpoint,
+                                 const char *local_ip) {
+  preferences.begin("wg", false);
+  preferences.putString("priv", private_key);
+  preferences.putString("pub", public_key);
+  preferences.putString("end", endpoint);
+  preferences.putString("ip", local_ip);
+  preferences.end();
+}
+
+bool SSHTerminal::load_wg_config(WireGuardConfig &config) {
+  preferences.begin("wg", true);
+  config.private_key = preferences.getString("priv", "").c_str();
+  config.remote_public_key = preferences.getString("pub", "").c_str();
+  config.endpoint = preferences.getString("end", "").c_str();
+  config.local_ip = preferences.getString("ip", "").c_str();
+  preferences.end();
+
+  // Fallback to hardcoded defaults if NVS is empty
+  if (config.private_key.empty()) {
+    config.private_key = "iJxJ5aP8FjseZBH6kD7teEh16pb8GycpsHuA+3+b1XQ=";
+    config.remote_public_key = "mk24FS+YDTEQ4QwUOWj00dXGdng0WRQz3w5dC9FZkyw=";
+    config.endpoint = "188.70.11.115:51820";
+    config.local_ip = "10.0.0.2";
+  }
+
+  // Parse endpoint port if present (host:port)
+  size_t colon = config.endpoint.find(':');
+  if (colon != std::string::npos) {
+    config.port = atoi(config.endpoint.substr(colon + 1).c_str());
+    config.endpoint = config.endpoint.substr(0, colon);
+  } else {
+    config.port = 51820; // Default WG port
+  }
+
+  return true;
 }
 
 void SSHTerminal::save_profile(const char *type, const char *host, int port,
@@ -264,31 +386,137 @@ void SSHTerminal::save_profile(const char *type, const char *host, int port,
 bool SSHTerminal::load_profile(const char *type, SSHProfile &profile) {
   std::string key = std::string("prof_") + type;
   preferences.begin(key.c_str(), true);
-  if (!preferences.isKey("host")) {
+
+  // Try to load from NVS
+  if (preferences.isKey("host")) {
+    profile.host = preferences.getString("host", "").c_str();
+    profile.port = preferences.getInt("port", 22);
+    profile.user = preferences.getString("user", "").c_str();
+    profile.pass = preferences.getString("pass", "").c_str();
     preferences.end();
-    return false;
+    return true;
   }
-  profile.host = preferences.getString("host", "").c_str();
-  profile.port = preferences.getInt("port", 22);
-  profile.user = preferences.getString("user", "").c_str();
-  profile.pass = preferences.getString("pass", "").c_str();
   preferences.end();
-  return true;
+
+  // Fallback to hardcoded defaults if NVS is empty
+  if (strcmp(type, "local") == 0) {
+    profile.host = "192.168.1.10";
+    profile.port = 22;
+    profile.user = "archie";
+    profile.pass = "archie";
+    return true;
+  } else if (strcmp(type, "remote") == 0) {
+    profile.host = "10.0.0.1";
+    profile.port = 22;
+    profile.user = "archie";
+    profile.pass = "archie";
+    return true;
+  }
+
+  return false;
 }
 
 void SSHTerminal::connect_to_profile(const char *type) {
-  SSHProfile prof;
-  if (load_profile(type, prof)) {
-    append_text("\nConnecting to [");
-    append_text(type);
-    append_text("] Profile...\n");
-    connect(prof.host.c_str(), prof.port, prof.user.c_str(), prof.pass.c_str());
-  } else {
-    append_text("\nError: No profile saved for [");
-    append_text(type);
-    append_text("]\n");
-    append_text("Usage: save <local|tailscale> <host> <port> <user> <pass>\n");
+  // Use background task for smoothness!
+  if (connection_task_handle) {
+    // Check if task is actually still running
+    eTaskState state = eTaskGetState(connection_task_handle);
+    if (state != eDeleted) {
+      vTaskDelete(connection_task_handle);
+    }
+    connection_task_handle = nullptr;
   }
+
+  // Use a heap-allocated copy to pass to the task safely
+  char *task_type = strdup(type);
+  if (!task_type)
+    return;
+
+  xTaskCreate(connection_task, "ssh_connect", 8192, (void *)task_type, 5,
+              &connection_task_handle);
+}
+
+void SSHTerminal::connection_task(void *param) {
+  char *type_ptr = (char *)param;
+  std::string type = type_ptr;
+  free(type_ptr); // Free the copy immediately after stringifying
+
+  SSHTerminal *ui = ssht_instance;
+
+  ui->show_terminal();
+  ui->append_text("\n[INIT] Requesting Secure Session...\n");
+
+  SSHProfile prof;
+  if (ui->load_profile(type.c_str(), prof)) {
+    if (!ui->wifi_connected) {
+      if (!ui->wifi_auto_connect()) {
+        ui->append_text("[ERROR] Link Offline. Check WiFi.\n");
+        vTaskDelete(NULL);
+        return;
+      }
+    }
+
+    if (type == "remote") {
+      if (!ui->wg_connect()) {
+        ui->append_text("[ERROR] Tunnel Failure. Aborting.\n");
+        vTaskDelete(NULL);
+        return;
+      }
+    }
+
+    ui->append_text("Negotiating SSH Handshake...\n");
+    ui->connect(prof.host.c_str(), prof.port, prof.user.c_str(),
+                prof.pass.c_str());
+  }
+
+  vTaskDelete(NULL);
+}
+
+bool SSHTerminal::wg_connect() {
+  WireGuardConfig config;
+  if (!load_wg_config(config)) {
+    append_text("Error: WireGuard config not found.\n");
+    return false;
+  }
+
+  append_text("Establishing WireGuard Tunnel...\n");
+
+  IPAddress local_ip;
+  if (!local_ip.fromString(config.local_ip.c_str())) {
+    append_text("Error: Invalid WireGuard Local IP.\n");
+    return false;
+  }
+
+  append_text("Configuring tunnel (MTU 1420)...\n");
+
+  if (wg.begin(local_ip, config.private_key.c_str(), config.endpoint.c_str(),
+               config.remote_public_key.c_str(), config.port)) {
+
+    // HANDSHAKE VERIFICATION LOOP
+    append_text("Waiting for Handshake...");
+    int retry = 0;
+    while (!wg.is_initialized() && retry < 10) {
+      append_text(".");
+      vTaskDelay(pdMS_TO_TICKS(500));
+      retry++;
+    }
+
+    if (wg.is_initialized()) {
+      append_text("\n[SUCCESS] WireGuard Tunnel active.\n");
+      return true;
+    } else {
+      append_text("\n[FAILED] Handshake timeout.\n");
+      return false;
+    }
+  } else {
+    append_text("WireGuard initialization failed!\n");
+    return false;
+  }
+}
+
+void SSHTerminal::wg_disconnect() {
+  wg.end();
+  append_text("WireGuard Tunnel DOWN.\n");
 }
 
 bool SSHTerminal::wifi_connect(const char *ssid, const char *password) {
@@ -311,12 +539,53 @@ bool SSHTerminal::wifi_connect(const char *ssid, const char *password) {
     append_text("WiFi connected! IP: ");
     append_text(WiFi.localIP().toString().c_str());
     append_text("\n");
+
+    // RESTORE NTP SYNCHRONIZATION
+    append_text("Synchronizing Time (NTP)...");
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    time_t now = time(nullptr);
+    int time_wait = 0;
+    while (now < 10000 && time_wait < 15) {
+      delay(500);
+      now = time(nullptr);
+      append_text(".");
+      time_wait++;
+    }
+
+    if (now > 10000) {
+      append_text("\nTime Synced.\n");
+    } else {
+      append_text("\nTime Sync Failed (Handshake may fail).\n");
+    }
+
     update_status_bar();
+
+    // Save WiFi credentials for auto-connect
+    preferences.begin("wifi", false);
+    preferences.putString("ssid", ssid);
+    preferences.putString("pass", password);
+    preferences.end();
+
     return true;
   } else {
     append_text("WiFi connection failed!\n");
     return false;
   }
+}
+
+bool SSHTerminal::wifi_auto_connect() {
+  preferences.begin("wifi", true);
+  String ssid = preferences.getString("ssid", "");
+  String pass = preferences.getString("pass", "");
+  preferences.end();
+
+  if (ssid != "") {
+    return wifi_connect(ssid.c_str(), pass.c_str());
+  }
+
+  // Fallback to defaults
+  append_text("Trying default WiFi (AAF)...\n");
+  return wifi_connect("AAF", "12345678");
 }
 
 void SSHTerminal::wifi_disconnect() {
@@ -353,12 +622,26 @@ bool SSHTerminal::connect(const char *host, int port, const char *user,
   ssh_options_set(session, SSH_OPTIONS_PORT, &port);
   ssh_options_set(session, SSH_OPTIONS_USER, user);
 
+  // Set explicit timeout (10 seconds)
+  long timeout_sec = 10;
+  ssh_options_set(session, SSH_OPTIONS_TIMEOUT, &timeout_sec);
+
   // Connect
   int rc = ssh_connect(session);
   if (rc != SSH_OK) {
     append_text("SSH connection failed: ");
     append_text(ssh_get_error(session));
     append_text("\n");
+
+    // Help the user diagnose
+    if (strstr(host, "100.")) {
+      append_text("Tip: Tailscale IPs (100.x.x.x) only work if this WiFi has a "
+                  "Tailscale Subnet Router.\n");
+    } else if (strncmp(host, "192.168.", 8) == 0) {
+      append_text("Tip: Check if your local machine (192.168.x.x) is on the "
+                  "same WiFi (AAF).\n");
+    }
+
     ssh_free(session);
     session = nullptr;
     return false;
@@ -506,7 +789,7 @@ void SSHTerminal::handle_key_input(char key) {
           append_text("Usage: ssh <HOST> <PORT> <USER> <PASS>\n");
         }
       } else if (current_input.rfind("save ", 0) == 0) {
-        // Parse: save <local|tailscale> <host> <port> <user> <pass>
+        // Parse: save <local|remote> <host> <port> <user> <pass>
         std::vector<std::string> parts;
         size_t pos = 0;
         std::string temp = current_input;
@@ -525,7 +808,25 @@ void SSHTerminal::handle_key_input(char key) {
           append_text("] saved.\n");
         } else {
           append_text(
-              "Usage: save <local|tailscale> <host> <port> <user> <pass>\n");
+              "Usage: save <local|remote> <host> <port> <user> <pass>\n");
+        }
+      } else if (current_input.rfind("save wg ", 0) == 0) {
+        // Parse: save wg <priv> <pub> <endpoint:port> <local_ip>
+        std::vector<std::string> parts;
+        size_t pos = 0;
+        std::string temp = current_input;
+        while ((pos = temp.find(' ')) != std::string::npos) {
+          parts.push_back(temp.substr(0, pos));
+          temp.erase(0, pos + 1);
+        }
+        parts.push_back(temp);
+
+        if (parts.size() >= 6) {
+          save_wg_config(parts[2].c_str(), parts[3].c_str(), parts[4].c_str(),
+                         parts[5].c_str());
+          append_text("WireGuard config saved.\n");
+        } else {
+          append_text("Usage: save wg <priv> <pub> <end:port> <ip>\n");
         }
       } else if (current_input == "home") {
         disconnect();
@@ -541,13 +842,13 @@ void SSHTerminal::handle_key_input(char key) {
       } else if (current_input == "help") {
         append_text("Commands:\n");
         append_text("  connect <SSID> <PASS> - Connect WiFi\n");
-        append_text("  ssh <HOST> <PORT> <USER> <PASS> - Manual SSH\n");
-        append_text("  save <type> <H> <P> <U> <P> - Save Profile\n");
+        append_text("  ssh <H> <P> <U> <P> - Manual SSH\n");
+        append_text("  save <local|remote> <H> <P> <U> <P> - Save Profile\n");
+        append_text(
+            "  save wg <priv> <pub> <end:port> <ip> - Save WireGuard\n");
         append_text("  home - Return to Launcher\n");
-        append_text("  disconnect - Disconnect WiFi\n");
         append_text("  exit - Disconnect SSH\n");
         append_text("  clear - Clear terminal\n");
-        append_text("  help - Show this help\n");
       } else if (!current_input.empty()) {
         append_text("Unknown command. Type 'help'\n");
       }
@@ -582,134 +883,6 @@ void SSHTerminal::handle_key_input(char key) {
   update_input_display();
 }
 
-void SSHTerminal::append_text(const char *text) {
-  if (!output_label)
-    return;
-
-  const char *current = lv_label_get_text(output_label);
-  std::string new_text = current;
-  new_text += text;
-
-  // Limit buffer size
-  if (new_text.size() > 4096) {
-    new_text = new_text.substr(new_text.size() - 2048);
-  }
-
-  lv_label_set_text(output_label, new_text.c_str());
-
-  // Scroll to bottom
-  lv_obj_t *parent = lv_obj_get_parent(output_label);
-  if (parent) {
-    lv_obj_scroll_to_y(parent, LV_COORD_MAX, LV_ANIM_OFF);
-  }
-}
-
-void SSHTerminal::clear_terminal() {
-  if (output_label) {
-    lv_label_set_text(output_label, "");
-  }
-  bytes_received = 0;
-  if (byte_counter_label) {
-    lv_label_set_text(byte_counter_label, "0 B");
-  }
-}
-
-void SSHTerminal::navigate_history(int direction) {
-  if (command_history.empty())
-    return;
-
-  if (direction > 0) {
-    // Older (up)
-    if (history_index < (int)command_history.size() - 1) {
-      history_index++;
-    }
-  } else {
-    // Newer (down)
-    if (history_index > 0) {
-      history_index--;
-    } else if (history_index == 0) {
-      history_index = -1;
-      current_input.clear();
-      cursor_pos = 0;
-      update_input_display();
-      return;
-    }
-  }
-
-  if (history_index >= 0 && history_index < (int)command_history.size()) {
-    int idx = command_history.size() - 1 - history_index;
-    current_input = command_history[idx];
-    cursor_pos = current_input.length();
-    update_input_display();
-  }
-}
-
-void SSHTerminal::delete_current_history_entry() {
-  if (history_index >= 0 && history_index < (int)command_history.size()) {
-    int idx = command_history.size() - 1 - history_index;
-    command_history.erase(command_history.begin() + idx);
-    history_needs_save = true;
-
-    if (history_index >= (int)command_history.size()) {
-      history_index = command_history.size() - 1;
-    }
-
-    if (history_index >= 0) {
-      int new_idx = command_history.size() - 1 - history_index;
-      current_input = command_history[new_idx];
-      cursor_pos = current_input.length();
-    } else {
-      current_input.clear();
-      cursor_pos = 0;
-    }
-
-    update_input_display();
-    append_text("[History entry deleted]\n");
-  }
-}
-
-void SSHTerminal::update_status_bar() {
-  if (!status_bar)
-    return;
-
-  std::string status;
-
-  // Status bar is on yellow header, so we use black text + colored symbols
-  // concept For visibility, we keep status text black but add colored
-  // indicators
-  if (!wifi_connected) {
-    status = LV_SYMBOL_WIFI " OFF";
-    // Red indicator on header (change bg color temporarily? No, just text)
-    lv_obj_set_style_text_color(status_bar, COLOR_ERROR, 0);
-  } else if (!ssh_connected) {
-    status = LV_SYMBOL_WIFI " OK | " LV_SYMBOL_CLOSE " SSH";
-    lv_obj_set_style_text_color(status_bar, COLOR_BG, 0); // Black on yellow
-  } else {
-    status = LV_SYMBOL_WIFI " OK | " LV_SYMBOL_OK " SSH";
-    lv_obj_set_style_text_color(status_bar, COLOR_BG, 0); // Black on yellow
-  }
-
-  lv_label_set_text(status_bar, status.c_str());
-}
-
-void SSHTerminal::update_input_display() {
-  if (!input_label)
-    return;
-
-  if (cursor_pos > current_input.length()) {
-    cursor_pos = current_input.length();
-  }
-
-  // Input text only (prompt is separate now)
-  std::string display = current_input;
-
-  if (cursor_visible) {
-    display.insert(cursor_pos, "|");
-  }
-
-  lv_label_set_text(input_label, display.c_str());
-}
-
 void SSHTerminal::flush_display_buffer() {
   if (text_buffer.empty())
     return;
@@ -728,7 +901,9 @@ void SSHTerminal::flush_display_buffer() {
       snprintf(counter_text, sizeof(counter_text), "%.2f MB",
                bytes_received / (1024.0 * 1024.0));
     }
+    lvgl_lock();
     lv_label_set_text(byte_counter_label, counter_text);
+    lvgl_unlock();
   }
 
   last_display_update = esp_timer_get_time() / 1000;
@@ -834,6 +1009,58 @@ void SSHTerminal::load_history() {
   }
 }
 
+void SSHTerminal::navigate_history(int direction) {
+  if (command_history.empty())
+    return;
+
+  if (direction > 0) {
+    if (history_index < (int)command_history.size() - 1) {
+      history_index++;
+    }
+  } else {
+    if (history_index > 0) {
+      history_index--;
+    } else if (history_index == 0) {
+      history_index = -1;
+      current_input.clear();
+      cursor_pos = 0;
+      update_input_display();
+      return;
+    }
+  }
+
+  if (history_index >= 0 && history_index < (int)command_history.size()) {
+    int idx = command_history.size() - 1 - history_index;
+    current_input = command_history[idx];
+    cursor_pos = current_input.length();
+    update_input_display();
+  }
+}
+
+void SSHTerminal::delete_current_history_entry() {
+  if (history_index >= 0 && history_index < (int)command_history.size()) {
+    int idx = command_history.size() - 1 - history_index;
+    command_history.erase(command_history.begin() + idx);
+    history_needs_save = true;
+
+    if (history_index >= (int)command_history.size()) {
+      history_index = command_history.size() - 1;
+    }
+
+    if (history_index >= 0) {
+      int new_idx = command_history.size() - 1 - history_index;
+      current_input = command_history[new_idx];
+      cursor_pos = current_input.length();
+    } else {
+      current_input.clear();
+      cursor_pos = 0;
+    }
+
+    update_input_display();
+    append_text("[History entry deleted]\n");
+  }
+}
+
 void SSHTerminal::save_history() {
   if (!history_needs_save)
     return;
@@ -849,4 +1076,47 @@ void SSHTerminal::save_history() {
   preferences.end();
 
   history_needs_save = false;
+}
+
+void SSHTerminal::btn_pulse_anim_cb(void *var, int32_t v) {
+  lv_obj_t *obj = (lv_obj_t *)var;
+  if (lv_obj_has_state(obj, LV_STATE_FOCUSED)) {
+    lv_obj_set_style_shadow_width(obj, v, LV_STATE_FOCUSED);
+    lv_obj_set_style_shadow_opa(obj, 100 + (v * 4), LV_STATE_FOCUSED);
+  }
+}
+
+void SSHTerminal::glitch_anim_cb(void *var, int32_t v) {
+  lv_obj_t *obj = (lv_obj_t *)var;
+  if (v == 0) {
+    lv_obj_set_style_translate_x(obj, 0, 0);
+    lv_obj_set_style_transform_scale(obj, 256, 0);
+    lv_obj_set_style_transform_angle(obj, 0, 0);
+  } else {
+    lv_obj_set_style_translate_x(obj, (rand() % 20) - 10, 0); // CRT jitter
+    lv_obj_set_style_transform_scale(obj, 256 + (v / 2), 0);
+    lv_obj_set_style_transform_angle(obj, (rand() % 40) - 20, 0);
+  }
+}
+
+void SSHTerminal::trigger_glitch(lv_obj_t *obj) {
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, obj);
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)glitch_anim_cb);
+  lv_anim_set_values(&a, 50, 0);
+  lv_anim_set_time(&a, 150);
+  lv_anim_start(&a);
+}
+
+void SSHTerminal::grid_scroll_anim_cb(void *var, int32_t v) {
+  lv_obj_t *obj = (lv_obj_t *)var;
+  lv_obj_set_y(obj, v);
+  // Fade out as it reaches bottom
+  int opa = 12;
+  if (v > 280)
+    opa = 12 - (v - 280) / 4;
+  if (opa < 0)
+    opa = 0;
+  lv_obj_set_style_bg_opa(obj, opa, 0);
 }
