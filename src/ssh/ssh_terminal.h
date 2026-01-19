@@ -35,6 +35,7 @@ public:
   // Terminal I/O
   void send_command(const char *cmd);
   void handle_key_input(char key);
+  void send_special_key(uint8_t key_code); // Ctrl+C, Tab, Esc, etc.
   void append_text(const char *text);
   void clear_terminal();
 

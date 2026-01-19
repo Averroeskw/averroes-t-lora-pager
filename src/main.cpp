@@ -109,9 +109,18 @@ void setup() {
   terminalScreen = sshTerminal->create_terminal_screen();
   lv_scr_load(terminalScreen);
 
-  // Display startup message
-  sshTerminal->append_text("AVERROES SSH Terminal v1.0\n");
-  sshTerminal->append_text("Type 'help' for commands\n\n");
+  // Display startup message with remote SSH examples
+  sshTerminal->append_text("═══════════════════════════════════════\n");
+  sshTerminal->append_text("  AVERROES SSH Terminal v2.0\n");
+  sshTerminal->append_text("  Secure Shell Client for ESP32\n");
+  sshTerminal->append_text("═══════════════════════════════════════\n\n");
+  sshTerminal->append_text("Quick Start:\n");
+  sshTerminal->append_text("  1. connect <WiFi> <Pass>\n");
+  sshTerminal->append_text("  2. ssh <host> <port> <user> <pass>\n\n");
+  sshTerminal->append_text("Remote Examples:\n");
+  sshTerminal->append_text("  ssh 192.168.1.100 22 root pass\n");
+  sshTerminal->append_text("  ssh my-vps.com 22 admin pass\n\n");
+  sshTerminal->append_text("Type 'help' for all commands\n\n");
   sshTerminal->update_status_bar();
 
   // Hardware interrupts for encoder

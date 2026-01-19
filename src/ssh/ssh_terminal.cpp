@@ -295,6 +295,15 @@ void SSHTerminal::send_command(const char *cmd) {
   ssh_channel_write(channel, cmd, strlen(cmd));
 }
 
+// Send special control characters (Ctrl+C, Tab, etc.)
+void SSHTerminal::send_special_key(uint8_t key_code) {
+  if (!ssh_connected || !channel)
+    return;
+
+  char buf[2] = {(char)key_code, 0};
+  ssh_channel_write(channel, buf, 1);
+}
+
 void SSHTerminal::handle_key_input(char key) {
   if (key == '\n' || key == '\r') {
     // Process command
