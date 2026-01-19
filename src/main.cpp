@@ -1,24 +1,23 @@
 /**
- * AVERROES T-LoRa Pager - Full UI Firmware
- * Cyberpunk Theme with Orange/Amber Accent
- * Resolution: 480x222 (Horizontal)
+ * AVERROES T-LoRa Pager - SSH Terminal Firmware
+ * Ported from PocketSSH (https://github.com/0015/PocketSSH)
+ * Adapted for LilyGo T-LoRa-Pager hardware
  *
  * Control Scheme:
- *   - Orange Button (ALT key): Page Switcher (cycles pages)
- *   - Rotary Rotation: Scroll/Navigate with haptic
- *   - Rotary Press: Select
- *   - Rotary Long Press: Back to Home
- *   - Enter: Select
+ *   - Rotary Rotation: Navigate command history
+ *   - Rotary Press: Execute current input (Enter)
+ *   - Rotary Long Press: Delete current history entry
  *   - Keyboard: Full QWERTY input
  */
 
+#include "ssh/ssh_terminal.h"
 #include <Arduino.h>
-#include <LilyGoLib.h>
 #include <LV_Helper.h>
-#include <WiFi.h>
-#include "ui/ui.h"
+#include <LilyGoLib.h>
 
-// LilyGoLib provides global 'instance' reference
+// Global SSH Terminal instance
+static SSHTerminal *sshTerminal = nullptr;
+static lv_obj_t *terminalScreen = nullptr;
 
 // Encoder state (interrupt-driven)
 static volatile int encPos = 0;
@@ -31,181 +30,162 @@ static bool lastButtonState = false;
 // Long press detection
 static uint32_t buttonPressStart = 0;
 static bool longPressHandled = false;
-#define LONG_PRESS_MS 800
-
-// Orange button (ALT key) detection
-// ALT key raw code = 0x14 (Row 2, Col 0 in keyboard matrix)
-#define KEY_ALT_RAW 0x14
-static volatile bool orangeButtonPressed = false;
-static uint32_t lastOrangeButtonTime = 0;
-#define ORANGE_BUTTON_DEBOUNCE_MS 200
+#define LONG_PRESS_MS 1000
 
 // Encoder ISR
 void IRAM_ATTR encISR() {
-    static int lastA = 0;
-    int a = digitalRead(ROTARY_A);
-    int b = digitalRead(ROTARY_B);
-    if (a != lastA) {
-        encPos += (b != a) ? 1 : -1;
-    }
-    lastA = a;
+  static int lastA = 0;
+  int a = digitalRead(ROTARY_A);
+  int b = digitalRead(ROTARY_B);
+  if (a != lastA) {
+    encPos += (b != a) ? 1 : -1;
+  }
+  lastA = a;
 }
 
-// Raw keyboard callback - catches ALT key (orange button) before processing
-void onRawKey(bool pressed, uint8_t raw) {
-    // Only handle orange button (ALT key 0x14) on press with debounce
-    if (raw == KEY_ALT_RAW && pressed) {
-        uint32_t now = millis();
-        if (now - lastOrangeButtonTime > ORANGE_BUTTON_DEBOUNCE_MS) {
-            lastOrangeButtonTime = now;
-            orangeButtonPressed = true;
-            Serial.println("[ORANGE] Page switch triggered!");
-        }
-    }
-}
+// Custom Keyboard Config for TCA8418
+static const char keymap[4][10] = {
+    {'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'},
+    {'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', '\n'},
+    {'\0', 'z', 'x', 'c', 'v', 'b', 'n', 'm', '\0', '\0'},
+    {' ', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0'}};
+static const char symbol_map[4][10] = {
+    {'1', '2', '3', '4', '5', '6', '7', '8', '9', '0'},
+    {'*', '/', '+', '-', '=', ':', '\'', '"', '@', '\0'},
+    {'\0', '_', '$', ';', '?', '!', ',', '.', '\0', '\0'},
+    {' ', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0', '\0'}};
+static const LilyGoKeyboardConfigure_t myKeyboardConfig = {
+    .kb_rows = 4,
+    .kb_cols = 10,
+    .current_keymap = (char *)&keymap[0][0],
+    .current_symbol_map = (char *)&symbol_map[0][0],
+    .symbol_key_value = 0x14, // Orange Button
+    .alt_key_value = 0xFF,    // Disable generic Alt
+    .caps_key_value = 0x1C,
+    .caps_b_key_value = 0xFF,
+    .char_b_value = 0x19,
+    .backspace_value = 0x1D,
+    .has_symbol_key = true};
 
-// Keyboard callback for character input
+// Keyboard callback for characters
 void onKeyPress(int state, char &c) {
-    if (state == 1) {  // KB_PRESSED
-        Serial.printf("[KEY] Pressed: '%c' (0x%02X)\n", c, (uint8_t)c);
+  if (state == 1 && sshTerminal) { // KB_PRESSED
+    // Haptic feedback
+    instance.setHapticEffects(1);
+    instance.vibrator();
 
-        // Pass to UI handler
-        ui_handle_key_press((uint8_t)c);
-
-        // Haptic feedback
-        instance.setHapticEffects(1);
-        instance.vibrator();
-    }
+    // Pass to SSH Terminal
+    Serial.printf("[KEY] %c (0x%02X)\n", c, c);
+    sshTerminal->handle_key_input(c);
+  }
 }
 
 void setup() {
-    Serial.begin(115200);
-    delay(100);
-    Serial.println("\n========================================");
-    Serial.println("   AVERROES T-LoRa Pager v1.0");
-    Serial.println("========================================");
+  Serial.begin(115200);
+  Serial.println("AVERROES SSH TERMINAL BOOTING...");
 
-    // Initialize board hardware
-    Serial.print("[INIT] Board... ");
-    instance.begin();
-    Serial.println("OK");
+  // Initialize LilyGoLib
+  instance.begin();
 
-    // Initialize LVGL display
-    Serial.print("[INIT] LVGL... ");
-    beginLvglHelper(instance);
-    Serial.println("OK");
+  // Set brightness
+  instance.setBrightness(150);
 
-    // Set brightness
-    instance.setBrightness(200);
+  // Setup keyboard callback
+  instance.kb.setCallback(onKeyPress);
 
-    // Setup rotary encoder pins
-    pinMode(ROTARY_A, INPUT_PULLUP);
-    pinMode(ROTARY_B, INPUT_PULLUP);
-    pinMode(ROTARY_C, INPUT_PULLUP);
-    attachInterrupt(digitalPinToInterrupt(ROTARY_A), encISR, CHANGE);
-    Serial.println("[INIT] Encoder... OK");
+  // Initialize keyboard with custom config
+  Serial.println("[DEBUG] Initializing Keyboard...");
+  if (instance.kb.begin(myKeyboardConfig, Wire, KB_INT, SDA, SCL)) {
+    Serial.println("[DEBUG] Keyboard Init SUCCESS");
+  } else {
+    Serial.println("[DEBUG] Keyboard Init FAILED");
+  }
 
-    // Setup keyboard callbacks
-    instance.kb.setRawCallback(onRawKey);      // Catch orange button
-    instance.kb.setCallback(onKeyPress);        // Catch character input
-    instance.kb.setRepeat(true);                // Enable key repeat
-    instance.kb.setBrightness(200);             // Keyboard backlight
-    Serial.println("[INIT] Keyboard... OK");
+  // Initialize Display & LVGL
+  beginLvglHelper(instance);
 
-    // Initialize the full UI system
-    Serial.print("[INIT] UI System... ");
-    ui_init();
-    Serial.println("OK");
+  // Create SSH Terminal
+  sshTerminal = new SSHTerminal();
+  terminalScreen = sshTerminal->create_terminal_screen();
+  lv_scr_load(terminalScreen);
 
-    // Startup haptic feedback
-    instance.setHapticEffects(47);
-    instance.vibrator();
+  // Display startup message
+  sshTerminal->append_text("AVERROES SSH Terminal v1.0\n");
+  sshTerminal->append_text("Type 'help' for commands\n\n");
+  sshTerminal->update_status_bar();
 
-    Serial.println("========================================");
-    Serial.println("   System Ready!");
-    Serial.println("   Controls:");
-    Serial.println("   - Orange btn: Switch pages");
-    Serial.println("   - Rotary: Scroll, Click=Select");
-    Serial.println("   - Long press: Home");
-    Serial.println("   - Enter: Select");
-    Serial.println("========================================\n");
+  // Hardware interrupts for encoder
+  pinMode(ROTARY_A, INPUT_PULLUP);
+  pinMode(ROTARY_B, INPUT_PULLUP);
+  pinMode(ROTARY_C, INPUT_PULLUP);
+  attachInterrupt(ROTARY_A, encISR, CHANGE);
+
+  Serial.println("System Ready.");
 }
 
 void loop() {
-    // Process LilyGoLib tasks (handles keyboard polling internally)
-    instance.loop();
+  // System Loop (Keyboard, etc)
+  instance.loop();
 
-    // Handle orange button (page switcher) - set by raw callback
-    if (orangeButtonPressed) {
-        orangeButtonPressed = false;
+  // Handle encoder rotation -> Navigate command history
+  int pos = encPos;
+  int delta = pos - lastEncPos;
+  if (delta != 0 && sshTerminal) {
+    lastEncPos = pos;
+    Serial.printf("[ENC] Delta: %d\n", delta);
 
-        // Cycle through pages: 0 -> 1 -> 2 -> 3 -> 4 -> 0 ...
-        ui_page_t nextPage = (ui_page_t)((ui_state.currentPage + 1) % PAGE_COUNT);
-        Serial.printf("[PAGE] Switching to page %d\n", nextPage);
-        ui_load_page_anim(nextPage, LV_SCR_LOAD_ANIM_MOVE_LEFT);
+    // Navigate history (up = older, down = newer)
+    sshTerminal->navigate_history(delta > 0 ? 1 : -1);
 
-        // Haptic feedback for page switch
-        instance.setHapticEffects(47);
+    // Haptic feedback
+    instance.setHapticEffects(3);
+    instance.vibrator();
+  }
+
+  // Handle encoder button with debounce and long press
+  bool isPressed = !digitalRead(ROTARY_C);
+  uint32_t now = millis();
+
+  if (isPressed != lastButtonState && (now - lastButtonTime) > 50) {
+    lastButtonTime = now;
+    lastButtonState = isPressed;
+
+    if (isPressed) {
+      // Button pressed - start timing for long press
+      buttonPressStart = now;
+      longPressHandled = false;
+    } else {
+      // Button released
+      if (!longPressHandled && sshTerminal) {
+        // Short click = Enter
+        Serial.println("[ENC] Click -> Enter");
+        sshTerminal->handle_key_input('\n');
+        instance.setHapticEffects(7);
         instance.vibrator();
+      }
     }
+  }
 
-    // Handle encoder rotation
-    int pos = encPos;
-    int delta = pos - lastEncPos;
-    if (delta != 0) {
-        lastEncPos = pos;
-        Serial.printf("[ENC] Delta: %d\n", delta);
-        ui_handle_encoder_rotate((int8_t)delta);
-
-        // Haptic feedback on rotation
-        instance.setHapticEffects(3);
-        instance.vibrator();
+  // Check for long press while button is held
+  if (isPressed && !longPressHandled &&
+      (now - buttonPressStart) > LONG_PRESS_MS) {
+    longPressHandled = true;
+    if (sshTerminal) {
+      Serial.println("[ENC] Long Press -> Delete History Entry");
+      sshTerminal->delete_current_history_entry();
+      instance.setHapticEffects(14);
+      instance.vibrator();
     }
+  }
 
-    // Handle encoder button with debounce and long press
-    bool isPressed = !digitalRead(ROTARY_C);
-    uint32_t now = millis();
+  // Update battery status periodically
+  static uint32_t lastBattUpdate = 0;
+  if (now - lastBattUpdate > 5000 && sshTerminal) {
+    lastBattUpdate = now;
+    sshTerminal->update_status_bar();
+  }
 
-    if (isPressed != lastButtonState && (now - lastButtonTime) > 50) {
-        lastButtonTime = now;
-        lastButtonState = isPressed;
-
-        if (isPressed) {
-            // Button pressed - start timing for long press
-            buttonPressStart = now;
-            longPressHandled = false;
-        } else {
-            // Button released
-            if (!longPressHandled) {
-                // Short click = Select
-                Serial.println("[ENC] Click -> Select");
-                ui_handle_encoder_click();
-                instance.setHapticEffects(7);
-                instance.vibrator();
-            }
-        }
-    }
-
-    // Check for long press while button is held
-    if (isPressed && !longPressHandled && (now - buttonPressStart) > LONG_PRESS_MS) {
-        longPressHandled = true;
-        Serial.println("[ENC] Long Press -> Home");
-        ui_handle_encoder_long_press();
-        instance.setHapticEffects(14);
-        instance.vibrator();
-    }
-
-    // Update battery status periodically
-    static uint32_t lastBattUpdate = 0;
-    if (now - lastBattUpdate > 2000) {
-        lastBattUpdate = now;
-
-        uint8_t pct = (uint8_t)instance.gauge.getStateOfCharge();
-        bool charging = instance.ppm.isCharging();
-        ui_update_battery(pct, charging);
-    }
-
-    // Process LVGL tasks
-    lv_timer_handler();
-    delay(5);
+  // Process LVGL tasks
+  lv_timer_handler();
+  delay(5);
 }
