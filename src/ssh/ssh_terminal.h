@@ -7,6 +7,7 @@
 #ifndef SSH_TERMINAL_H
 #define SSH_TERMINAL_H
 
+#include "UIMessageQueue.h"
 #include <Arduino.h>
 #include <LilyGoLib.h>
 #include <Preferences.h>
@@ -18,9 +19,13 @@
 #include <string>
 #include <vector>
 
-// Global LVGL thread safety (defined in main.cpp)
+// Global lock wrappers for cross-file use
 extern void lvgl_lock();
 extern void lvgl_unlock();
+extern void i2c_lock();
+extern void i2c_unlock();
+
+// UIMessage from UIMessageQueue.h is used for pooled updates
 
 struct SSHProfile {
   std::string host;
@@ -124,6 +129,7 @@ private:
   bool history_needs_save = false;
 
   // Display buffer
+  std::string cumulative_text;
   std::string text_buffer;
   size_t bytes_received = 0;
   int64_t last_display_update = 0;
@@ -143,10 +149,11 @@ private:
   TaskHandle_t receive_task_handle = nullptr;
   TaskHandle_t connection_task_handle = nullptr;
   WireGuard wg;
+  UIMessageQueue ui_queue;
 
   static SSHTerminal *ssht_instance;
   // Helper methods
-  std::string strip_ansi_codes(const char *data, size_t len);
+  std::string apply_ansi_formatting(const char *data, size_t len);
   void process_received_data(const char *data, size_t len);
   void load_history();
   void save_history();
@@ -154,7 +161,19 @@ private:
   static void btn_pulse_anim_cb(void *var, int32_t v);
   static void glitch_anim_cb(void *var, int32_t v);
   static void grid_scroll_anim_cb(void *var, int32_t v);
+  static void title_flicker_cb(void *var, int32_t v);
+
+  // Async UI handlers
+  static void async_append_text_cb(void *param);
+  static void async_update_status_cb(void *param);
+  static void async_show_terminal_cb(void *param);
+  static void async_show_launcher_cb(void *param);
+  static void async_update_input_cb(void *param);
+  static void async_update_counter_cb(void *param);
   void trigger_glitch(lv_obj_t *obj);
+
+  void save_session();
+  void load_session();
 };
 
 #endif // SSH_TERMINAL_H

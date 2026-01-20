@@ -7,6 +7,7 @@
  */
 
 #include "ssh_terminal.h"
+#include "../hal/void_hal.h"
 #include <LilyGoLib.h>
 #include <Preferences.h>
 #include <esp_timer.h>
@@ -40,16 +41,19 @@ extern LilyGoLoRaPager &instance;
 SSHTerminal::SSHTerminal() {
   ssht_instance = this;
   load_history();
+  load_session();
 }
 
 SSHTerminal::~SSHTerminal() {
   save_history();
+  save_session();
   disconnect();
   wifi_disconnect();
 }
 
 lv_obj_t *SSHTerminal::create_terminal_screen() {
   terminal_screen = lv_obj_create(NULL);
+  lv_obj_set_size(terminal_screen, 240, 320); // CRITICAL: Fix screen scaling
   lv_obj_set_style_bg_color(terminal_screen, COLOR_BG, 0);
   lv_obj_set_style_pad_all(terminal_screen, 0, 0);
 
@@ -65,6 +69,9 @@ lv_obj_t *SSHTerminal::create_terminal_screen() {
   lv_obj_set_style_radius(header_bar, 0, 0);
   lv_obj_set_style_pad_hor(header_bar, 8, 0);
   lv_obj_set_style_pad_ver(header_bar, 4, 0);
+  lv_obj_set_style_shadow_width(header_bar, 12, 0);
+  lv_obj_set_style_shadow_color(header_bar, COLOR_FG, 0);
+  lv_obj_set_style_shadow_opa(header_bar, 150, 0);
   lv_obj_clear_flag(header_bar, LV_OBJ_FLAG_SCROLLABLE);
 
   // Title label (left side)
@@ -93,9 +100,31 @@ lv_obj_t *SSHTerminal::create_terminal_screen() {
   // ═══════════════════════════════════════════════════════════════════════
   lv_obj_t *output_container = lv_obj_create(terminal_screen);
   lv_obj_set_pos(output_container, 0, STATUS_BAR_HEIGHT);
+  // Explicitly set height to fill middle area
   lv_obj_set_size(output_container, LV_PCT(100),
-                  lv_pct(100) - STATUS_BAR_HEIGHT - INPUT_BAR_HEIGHT - 8);
+                  320 - STATUS_BAR_HEIGHT - INPUT_BAR_HEIGHT);
   lv_obj_set_style_bg_color(output_container, COLOR_BG, 0);
+
+  // Background Pattern for terminal (Subtle points or grid)
+  for (int i = 0; i < 240; i += 20) {
+    lv_obj_t *v_line = lv_obj_create(output_container);
+    lv_obj_set_size(v_line, 1, 320);
+    lv_obj_set_pos(v_line, i, 0);
+    lv_obj_set_style_bg_color(v_line, COLOR_FG, 0);
+    lv_obj_set_style_bg_opa(v_line, 10, 0);
+    lv_obj_set_style_border_width(v_line, 0, 0);
+    lv_obj_add_flag(v_line, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  }
+  for (int i = 0; i < 320; i += 20) {
+    lv_obj_t *h_line = lv_obj_create(output_container);
+    lv_obj_set_size(h_line, 240, 1);
+    lv_obj_set_pos(h_line, 0, i);
+    lv_obj_set_style_bg_color(h_line, COLOR_FG, 0);
+    lv_obj_set_style_bg_opa(h_line, 10, 0);
+    lv_obj_set_style_border_width(h_line, 0, 0);
+    lv_obj_add_flag(h_line, LV_OBJ_FLAG_IGNORE_LAYOUT);
+  }
+
   lv_obj_set_style_border_width(output_container, 0, 0);
   lv_obj_set_style_radius(output_container, 0, 0);
   lv_obj_set_style_pad_all(output_container, 8, 0);
@@ -105,7 +134,11 @@ lv_obj_t *SSHTerminal::create_terminal_screen() {
   output_label = lv_label_create(output_container);
   lv_obj_set_width(output_label, LV_PCT(100));
   lv_obj_set_style_text_color(output_label, COLOR_FG, 0);
-  lv_obj_set_style_text_font(output_label, &lv_font_montserrat_12, 0);
+  lv_obj_set_style_text_font(output_label, &lv_font_montserrat_14,
+                             0); // Clarity increase
+  lv_obj_set_style_text_line_space(output_label, 4,
+                                   0);          // Decouple "squished" lines
+  lv_obj_set_style_pad_hor(output_label, 5, 0); // Internal margin
   lv_label_set_long_mode(output_label, LV_LABEL_LONG_WRAP);
   lv_label_set_text(output_label, "");
 
@@ -123,6 +156,9 @@ lv_obj_t *SSHTerminal::create_terminal_screen() {
   lv_obj_set_style_radius(input_bar, 0, 0);
   lv_obj_set_style_pad_hor(input_bar, 8, 0);
   lv_obj_set_style_pad_ver(input_bar, 4, 0);
+  lv_obj_set_style_shadow_width(input_bar, 12, 0);
+  lv_obj_set_style_shadow_color(input_bar, COLOR_FG, 0);
+  lv_obj_set_style_shadow_opa(input_bar, 100, 0);
   lv_obj_clear_flag(input_bar, LV_OBJ_FLAG_SCROLLABLE);
 
   // Prompt symbol
@@ -139,11 +175,23 @@ lv_obj_t *SSHTerminal::create_terminal_screen() {
   lv_label_set_text(input_label, "|");
   lv_obj_align(input_label, LV_ALIGN_LEFT_MID, 16, 0);
 
+  // Blinking cursor animation
+  lv_anim_t a_cursor;
+  lv_anim_init(&a_cursor);
+  lv_anim_set_var(&a_cursor, input_label);
+  lv_anim_set_exec_cb(&a_cursor, (lv_anim_exec_xcb_t)lv_obj_set_style_opa);
+  lv_anim_set_values(&a_cursor, 255, 0);
+  lv_anim_set_time(&a_cursor, 500);
+  lv_anim_set_playback_time(&a_cursor, 500);
+  lv_anim_set_repeat_count(&a_cursor, LV_ANIM_REPEAT_INFINITE);
+  lv_anim_start(&a_cursor);
+
   return terminal_screen;
 }
 
 lv_obj_t *SSHTerminal::create_launcher_screen() {
   launcher_screen = lv_obj_create(NULL);
+  lv_obj_set_size(launcher_screen, 240, 320); // CRITICAL: Fix screen scaling
   lv_obj_set_style_bg_color(launcher_screen, COLOR_BG, 0);
 
   // 1. INFINITY WIREFRAME GRID (Base Layer)
@@ -179,23 +227,36 @@ lv_obj_t *SSHTerminal::create_launcher_screen() {
   lv_obj_set_style_border_width(vignette, 0, 0);
   lv_obj_set_style_shadow_width(vignette, 120, 0);
   lv_obj_set_style_shadow_color(vignette, lv_color_hex(0x000000), 0);
-  lv_obj_set_style_shadow_opa(vignette, 255, 0);
+  lv_obj_set_style_shadow_opa(vignette, 230,
+                              0); // Slightly lighter for visibility
   // lv_obj_set_style_shadow_spread(vignette, 10, 0);
   lv_obj_add_flag(vignette, LV_OBJ_FLAG_IGNORE_LAYOUT);
   lv_obj_set_ext_click_area(vignette, 0);
 
   // 3. UI TITLES
   lv_obj_t *title = lv_label_create(launcher_screen);
-  lv_obj_set_style_text_color(title, COLOR_FG, 0);
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-  lv_label_set_text(title, "AVERROES SSH");
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 35);
+  lv_obj_set_style_text_color(title, COLOR_HIGHLIGHT, 0);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24,
+                             0); // Bold digital look
+  lv_label_set_text(title, "VOID-GATE");
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 40);
+
+  // START FLICKER ANIMATION
+  lv_anim_t a_flicker;
+  lv_anim_init(&a_flicker);
+  lv_anim_set_var(&a_flicker, title);
+  lv_anim_set_exec_cb(&a_flicker, (lv_anim_exec_xcb_t)title_flicker_cb);
+  lv_anim_set_values(&a_flicker, 0, 255);
+  lv_anim_set_time(&a_flicker, 800);
+  lv_anim_set_playback_time(&a_flicker, 50);
+  lv_anim_set_repeat_count(&a_flicker, LV_ANIM_REPEAT_INFINITE);
+  lv_anim_start(&a_flicker);
 
   lv_obj_t *subtitle = lv_label_create(launcher_screen);
   lv_obj_set_style_text_color(subtitle, COLOR_DIM, 0);
   lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_12, 0);
-  lv_label_set_text(subtitle, "ELITE v2.7 READY");
-  lv_obj_align(subtitle, LV_ALIGN_TOP_MID, 0, 65);
+  lv_label_set_text(subtitle, "ENCRYPTION NODE v5.1"); // Creative Branding
+  lv_obj_align(subtitle, LV_ALIGN_TOP_MID, 0, 70);
 
   // 4. NAVIGATION GROUP & STYLES
   launcher_group = lv_group_create();
@@ -230,29 +291,30 @@ lv_obj_t *SSHTerminal::create_launcher_screen() {
   lv_style_set_text_color(&style_btn_focused, COLOR_HIGHLIGHT);
   lv_style_set_transform_scale(&style_btn_focused, 285);
 
-  // 5. BUTTONS
+  // 5. SIDE-BY-SIDE BUTTONS
   lv_obj_t *btn_local = lv_btn_create(launcher_screen);
-  lv_obj_set_size(btn_local, 230, 65);
-  lv_obj_align(btn_local, LV_ALIGN_CENTER, 0, -5);
+  lv_obj_set_size(btn_local, 100, 70); // Adjusted for better center clearance
+  lv_obj_align(btn_local, LV_ALIGN_CENTER, -55, 45);
   lv_obj_add_style(btn_local, &style_btn, 0);
   lv_obj_add_style(btn_local, &style_btn_focused, LV_STATE_FOCUSED);
   lv_obj_t *label_local = lv_label_create(btn_local);
-  lv_label_set_text(label_local, LV_SYMBOL_HOME "  LOCAL SESSION");
+  lv_label_set_text(label_local,
+                    LV_SYMBOL_HOME "\nLOCAL"); // Newline for side-by-side
+  lv_obj_set_style_text_align(label_local, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(label_local);
-  lv_obj_add_event_cb(btn_local, launcher_event_cb, LV_EVENT_CLICKED,
-                      (void *)"local");
+  lv_obj_set_user_data(btn_local, (void *)"local");
   lv_group_add_obj(launcher_group, btn_local);
 
   lv_obj_t *btn_remote = lv_btn_create(launcher_screen);
-  lv_obj_set_size(btn_remote, 230, 65);
-  lv_obj_align(btn_remote, LV_ALIGN_CENTER, 0, 75);
+  lv_obj_set_size(btn_remote, 100, 70);
+  lv_obj_align(btn_remote, LV_ALIGN_CENTER, 55, 45);
   lv_obj_add_style(btn_remote, &style_btn, 0);
   lv_obj_add_style(btn_remote, &style_btn_focused, LV_STATE_FOCUSED);
   lv_obj_t *label_remote = lv_label_create(btn_remote);
-  lv_label_set_text(label_remote, LV_SYMBOL_WIFI "  REMOTE TUNNEL");
+  lv_label_set_text(label_remote, LV_SYMBOL_WIFI "\nREMOTE");
+  lv_obj_set_style_text_align(label_remote, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_center(label_remote);
-  lv_obj_add_event_cb(btn_remote, launcher_event_cb, LV_EVENT_CLICKED,
-                      (void *)"remote");
+  lv_obj_set_user_data(btn_remote, (void *)"remote");
   lv_group_add_obj(launcher_group, btn_remote);
 
   // 6. CRT OVERLAY (Top Layer)
@@ -261,7 +323,8 @@ lv_obj_t *SSHTerminal::create_launcher_screen() {
     lv_obj_set_size(scanline, 240, 1);
     lv_obj_align(scanline, LV_ALIGN_TOP_MID, 0, i);
     lv_obj_set_style_bg_color(scanline, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(scanline, 35, 0);
+    lv_obj_set_style_bg_opa(scanline, 20,
+                            0); // Much lighter scanlines for better text
     lv_obj_set_style_border_width(scanline, 0, 0);
     lv_obj_add_flag(scanline, LV_OBJ_FLAG_IGNORE_LAYOUT);
   }
@@ -269,62 +332,154 @@ lv_obj_t *SSHTerminal::create_launcher_screen() {
 }
 
 void SSHTerminal::show_launcher() {
+  lv_async_call(async_show_launcher_cb, NULL);
+}
+
+void SSHTerminal::async_show_launcher_cb(void *param) {
+  if (!ssht_instance || !ssht_instance->launcher_screen)
+    return;
   lvgl_lock();
-  in_launcher = true;
-  lv_scr_load(launcher_screen);
+  ssht_instance->in_launcher = true;
+  lv_scr_load(ssht_instance->launcher_screen);
   lvgl_unlock();
 }
 
 void SSHTerminal::show_terminal() {
-  lv_group_focus_obj(output_label); // Focus terminal output for scrolling
+  lv_async_call(async_show_terminal_cb, NULL);
+}
+
+void SSHTerminal::async_show_terminal_cb(void *param) {
+  if (!ssht_instance || !ssht_instance->terminal_screen)
+    return;
   lvgl_lock();
-  in_launcher = false;
-  lv_scr_load(terminal_screen);
+  lv_screen_load_anim(ssht_instance->terminal_screen, LV_SCR_LOAD_ANIM_FADE_ON,
+                      200, 0, false);
+  lv_group_focus_obj(ssht_instance->output_label);
+  ssht_instance->in_launcher = false;
   lvgl_unlock();
 }
 
 void SSHTerminal::append_text(const char *text) {
+  if (!text)
+    return;
+
+  // Decouple from background tasks using pooled messages
+  UIMessage *msg = ssht_instance->ui_queue.checkout();
+  if (!msg)
+    return;
+
+  strncpy(msg->text, text, MAX_ASYNC_TEXT - 1);
+  msg->text[MAX_ASYNC_TEXT - 1] = '\0';
+  msg->clear = false;
+  lv_async_call(async_append_text_cb, msg);
+}
+
+void SSHTerminal::async_append_text_cb(void *param) {
+  UIMessage *msg = (UIMessage *)param;
+  if (!msg || !ssht_instance || !ssht_instance->output_label) {
+    if (msg)
+      ssht_instance->ui_queue.release(msg);
+    return;
+  }
+
   lvgl_lock();
-  lv_label_set_text(output_label, text);
-  // Custom scrolling behavior for label if needed,
-  // but usually it's inside a container.
+  ssht_instance->cumulative_text += msg->text;
+
+  // Keep terminal buffer within reasonable limits (4KB)
+  if (ssht_instance->cumulative_text.size() > 4096) {
+    ssht_instance->cumulative_text = ssht_instance->cumulative_text.substr(
+        ssht_instance->cumulative_text.size() - 2048);
+  }
+
+  lv_label_set_text(ssht_instance->output_label,
+                    ssht_instance->cumulative_text.c_str());
+
+  // Scroll to bottom
+  lv_obj_scroll_to_y(lv_obj_get_parent(ssht_instance->output_label),
+                     LV_COORD_MAX, LV_ANIM_ON);
   lvgl_unlock();
+
+  ssht_instance->ui_queue.release(msg);
 }
 
 void SSHTerminal::update_status_bar() {
-  lvgl_lock();
-  char buf[64];
-  // Refresh and get battery info from the fuel gauge
-  instance.gauge.refresh();
-  float volt = instance.gauge.getVoltage() / 1000.0;
-  int percent = instance.gauge.getStateOfCharge();
+  char *buf = (char *)malloc(64);
+  if (!buf)
+    return;
+
+  // Refresh and get battery info via HAL
+  VOID_HAL::refreshPower();
+  float volt = VOID_HAL::getBatteryVoltage();
+  int percent = VOID_HAL::getBatteryPercent();
+
   const char *wifi_status = wifi_connected ? "ONLINE" : "OFFLINE";
   if (is_connecting)
     wifi_status = "BUSY...";
 
-  snprintf(buf, sizeof(buf),
+  snprintf(buf, 64,
            "#FFD700 " LV_SYMBOL_BATTERY_3
            " %d%% (%.2fV) #  #00FF00 " LV_SYMBOL_WIFI " %s #",
            percent, volt, wifi_status);
-  lv_label_set_text(status_bar, buf);
+
+  // Pass formatted string to main thread
+  lv_async_call(async_update_status_cb, buf);
+}
+
+void SSHTerminal::async_update_status_cb(void *param) {
+  char *buf = (char *)param;
+  if (!buf || !ssht_instance || !ssht_instance->status_bar) {
+    if (buf)
+      free(buf);
+    return;
+  }
+
+  lvgl_lock();
+  lv_label_set_text(ssht_instance->status_bar, buf);
   lvgl_unlock();
+
+  free(buf);
+}
+
+void SSHTerminal::async_update_counter_cb(void *param) {
+  char *buf = (char *)param;
+  if (!buf || !ssht_instance || !ssht_instance->byte_counter_label) {
+    if (buf)
+      free(buf);
+    return;
+  }
+  lvgl_lock();
+  lv_label_set_text(ssht_instance->byte_counter_label, buf);
+  lvgl_unlock();
+  free(buf);
 }
 
 void SSHTerminal::update_input_display() {
+  std::string *input_ptr = new std::string("> " + current_input);
+  lv_async_call(async_update_input_cb, input_ptr);
+}
+
+void SSHTerminal::async_update_input_cb(void *param) {
+  std::string *input = (std::string *)param;
+  if (!input || !ssht_instance || !ssht_instance->input_label) {
+    if (input)
+      delete input;
+    return;
+  }
   lvgl_lock();
-  lv_label_set_text(input_label, ("> " + current_input).c_str());
+  lv_label_set_text(ssht_instance->input_label, input->c_str());
   lvgl_unlock();
+  delete input;
 }
 
 void SSHTerminal::clear_terminal() {
   lvgl_lock();
+  cumulative_text.clear();
   lv_label_set_text(output_label, "");
   lvgl_unlock();
 }
 
 void SSHTerminal::vibrate(uint32_t ms) {
-  instance.vibrator();
-  // Simplified for now as vibrator() is usually non-blocking short pulse
+  VOID_HAL::vibrate(1); // Standard click
 }
 
 void SSHTerminal::launcher_event_cb(lv_event_t *e) {
@@ -423,6 +578,9 @@ bool SSHTerminal::load_profile(const char *type, SSHProfile &profile) {
 }
 
 void SSHTerminal::connect_to_profile(const char *type) {
+  if (!type)
+    return; // Safety check
+
   if (is_connecting) {
     append_text("[BUSY] Connection in progress...\n");
     return;
@@ -464,6 +622,7 @@ void SSHTerminal::connection_task(void *param) {
       if (!ui->wifi_auto_connect()) {
         ui->append_text("[ERROR] Link Offline. Check WiFi.\n");
         ui->is_connecting = false;
+        ui->connection_task_handle = nullptr;
         vTaskDelete(NULL);
         return;
       }
@@ -473,6 +632,7 @@ void SSHTerminal::connection_task(void *param) {
       if (!ui->wg_connect()) {
         ui->append_text("[ERROR] Tunnel Failure. Aborting.\n");
         ui->is_connecting = false;
+        ui->connection_task_handle = nullptr;
         vTaskDelete(NULL);
         return;
       }
@@ -489,6 +649,7 @@ void SSHTerminal::connection_task(void *param) {
   }
 
   ui->is_connecting = false;
+  ui->connection_task_handle = nullptr;
   vTaskDelete(NULL);
 }
 
@@ -912,19 +1073,18 @@ void SSHTerminal::flush_display_buffer() {
   text_buffer.clear();
 
   if (bytes_received > 0 && byte_counter_label) {
-    char counter_text[32];
-    if (bytes_received < 1024) {
-      snprintf(counter_text, sizeof(counter_text), "%zu B", bytes_received);
-    } else if (bytes_received < 1024 * 1024) {
-      snprintf(counter_text, sizeof(counter_text), "%.1f KB",
-               bytes_received / 1024.0);
-    } else {
-      snprintf(counter_text, sizeof(counter_text), "%.2f MB",
-               bytes_received / (1024.0 * 1024.0));
+    char *counter_buf = (char *)malloc(32);
+    if (counter_buf) {
+      if (bytes_received < 1024) {
+        snprintf(counter_buf, 32, "%zu B", bytes_received);
+      } else if (bytes_received < 1024 * 1024) {
+        snprintf(counter_buf, 32, "%.1f KB", bytes_received / 1024.0);
+      } else {
+        snprintf(counter_buf, 32, "%.2f MB",
+                 bytes_received / (1024.0 * 1024.0));
+      }
+      lv_async_call(async_update_counter_cb, counter_buf);
     }
-    lvgl_lock();
-    lv_label_set_text(byte_counter_label, counter_text);
-    lvgl_unlock();
   }
 
   last_display_update = esp_timer_get_time() / 1000;
@@ -951,12 +1111,12 @@ void SSHTerminal::ssh_receive_task(void *param) {
   }
 
   terminal->run_receive_task = false;
-  vTaskDelete(NULL);
+  terminal->receive_task_handle = nullptr;
 }
 
-std::string SSHTerminal::strip_ansi_codes(const char *data, size_t len) {
+std::string SSHTerminal::apply_ansi_formatting(const char *data, size_t len) {
   std::string result;
-  result.reserve(len);
+  result.reserve(len * 1.5); // Space for LVGL tags
 
   for (size_t i = 0; i < len; i++) {
     if (data[i] == '\x1B' || data[i] == '\033') {
@@ -966,28 +1126,44 @@ std::string SSHTerminal::strip_ansi_codes(const char *data, size_t len) {
 
       if (data[i] == '[') {
         i++;
+        std::string params;
         while (i < len && !((data[i] >= 'A' && data[i] <= 'Z') ||
                             (data[i] >= 'a' && data[i] <= 'z'))) {
+          params += data[i];
           i++;
+        }
+
+        char cmd = data[i];
+        if (cmd == 'm') { // SGR - Select Graphic Rendition (Colors)
+          if (params == "0" || params.empty()) {
+            result += "#"; // Reset color tag for LVGL
+          } else if (params == "31") {
+            result += "#FF3333 "; // Red
+          } else if (params == "32") {
+            result += "#00FF66 "; // Green
+          } else if (params == "33") {
+            result += "#FFFF00 "; // Yellow
+          } else if (params == "34") {
+            result += "#3366FF "; // Blue
+          } else if (params == "35") {
+            result += "#FF33FF "; // Magenta
+          } else if (params == "36") {
+            result += "#33FFFF "; // Cyan
+          }
         }
       } else if (data[i] == ']') {
-        i++;
-        while (i < len) {
-          if (data[i] == '\007')
-            break;
-          if (data[i] == '\x1B' && i + 1 < len && data[i + 1] == '\\') {
-            i++;
-            break;
-          }
+        // OSC codes - skip
+        while (i < len && data[i] != '\007')
           i++;
-        }
-      } else if (data[i] == '(' || data[i] == ')') {
-        i++;
       }
     } else if (data[i] == '\r') {
       continue;
     } else {
-      result += data[i];
+      // Escape special LVGL characters if they appear in raw data
+      if (data[i] == '#')
+        result += "##";
+      else
+        result += data[i];
     }
   }
 
@@ -997,7 +1173,7 @@ std::string SSHTerminal::strip_ansi_codes(const char *data, size_t len) {
 void SSHTerminal::process_received_data(const char *data, size_t len) {
   bytes_received += len;
 
-  std::string cleaned = strip_ansi_codes(data, len);
+  std::string cleaned = apply_ansi_formatting(data, len);
   text_buffer += cleaned;
 
   int64_t current_time = esp_timer_get_time() / 1000;
@@ -1130,6 +1306,34 @@ void SSHTerminal::trigger_glitch(lv_obj_t *obj) {
   lv_anim_set_values(&a, 50, 0);
   lv_anim_set_time(&a, 150);
   lv_anim_start(&a);
+}
+
+void SSHTerminal::title_flicker_cb(void *var, int32_t v) {
+  lv_obj_t *obj = (lv_obj_t *)var;
+  if (v % 100 > 95) { // Rapid flicker occasional dropout
+    lv_obj_set_style_opa(obj, 0, 0);
+  } else if (v % 30 < 10) { // Slight dimming
+    lv_obj_set_style_opa(obj, 180, 0);
+  } else {
+    lv_obj_set_style_opa(obj, 255, 0);
+  }
+}
+
+void SSHTerminal::save_session() {
+  if (cumulative_text.empty())
+    return;
+  preferences.begin("ssh_term", false);
+  preferences.putString("session", cumulative_text.c_str());
+  preferences.end();
+}
+
+void SSHTerminal::load_session() {
+  preferences.begin("ssh_term", true);
+  String session_str = preferences.getString("session", "");
+  preferences.end();
+  if (session_str.length() > 0) {
+    cumulative_text = session_str.c_str();
+  }
 }
 
 void SSHTerminal::grid_scroll_anim_cb(void *var, int32_t v) {

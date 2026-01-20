@@ -10,6 +10,7 @@
  *   - Keyboard: Full QWERTY input
  */
 
+#include "hal/void_hal.h"
 #include "ssh/ssh_terminal.h"
 #include <Arduino.h>
 #include <LV_Helper.h>
@@ -19,17 +20,21 @@
 static SSHTerminal *sshTerminal = nullptr;
 static lv_obj_t *terminalScreen = nullptr;
 SemaphoreHandle_t lvgl_mutex = NULL;
+SemaphoreHandle_t i2c_mutex = NULL;
 
 // Global lock wrappers for cross-file use
 void lvgl_lock() {
   if (lvgl_mutex)
-    xSemaphoreTake(lvgl_mutex, portMAX_DELAY);
+    xSemaphoreTakeRecursive(lvgl_mutex, portMAX_DELAY);
 }
 
 void lvgl_unlock() {
   if (lvgl_mutex)
-    xSemaphoreGive(lvgl_mutex);
+    xSemaphoreGiveRecursive(lvgl_mutex);
 }
+
+void i2c_lock() { VOID_HAL::lock(); }
+void i2c_unlock() { VOID_HAL::unlock(); }
 
 // Encoder state (interrupt-driven)
 static volatile int encPos = 0;
@@ -84,8 +89,7 @@ void onKeyPress(int state, char &c) {
   if (state == 1 && sshTerminal) { // KB_PRESSED
     lvgl_lock();
     // Haptic feedback
-    instance.setHapticEffects(1);
-    instance.vibrator();
+    VOID_HAL::vibrate(1);
 
     // Pass to SSH Terminal
     Serial.printf("[KEY] %c (0x%02X)\n", c, c);
@@ -98,21 +102,19 @@ void setup() {
   Serial.begin(115200);
   Serial.println("AVERROES SSH TERMINAL BOOTING...");
 
-  // Create LVGL mutex for thread safety
-  lvgl_mutex = xSemaphoreCreateRecursiveMutex();
-
-  // Initialize LilyGoLib
-  instance.begin();
+  // Initialize VOID-HAL (handles i2c_mutex and instance.begin)
+  VOID_HAL::begin();
 
   // Set brightness
-  instance.setBrightness(150);
+  VOID_HAL::setBrightness(150);
 
   // Setup keyboard callback
   instance.kb.setCallback(onKeyPress);
 
   // Initialize keyboard with custom config
   Serial.println("[DEBUG] Initializing Keyboard...");
-  if (instance.kb.begin(myKeyboardConfig, Wire, KB_INT, SDA, SCL)) {
+  if (VOID_HAL::get_instance().kb.begin(myKeyboardConfig, Wire, KB_INT, SDA,
+                                        SCL)) {
     Serial.println("[DEBUG] Keyboard Init SUCCESS");
   } else {
     Serial.println("[DEBUG] Keyboard Init FAILED");
@@ -121,6 +123,7 @@ void setup() {
   // Initialize Display & LVGL
   beginLvglHelper(instance);
 
+  // Initialize SSH Terminal
   // Initialize SSH Terminal
   sshTerminal = new SSHTerminal();
   terminalScreen = sshTerminal->create_terminal_screen();
@@ -142,17 +145,19 @@ void setup() {
   sshTerminal->update_status_bar();
 
   // Hardware interrupts for encoder
+  VOID_HAL::lock();
   pinMode(ROTARY_A, INPUT_PULLUP);
   pinMode(ROTARY_B, INPUT_PULLUP);
   pinMode(ROTARY_C, INPUT_PULLUP);
   attachInterrupt(ROTARY_A, encISR, CHANGE);
+  VOID_HAL::unlock();
 
   Serial.println("System Ready.");
 }
 
 void loop() {
   // System Loop (Keyboard, etc)
-  instance.loop();
+  VOID_HAL::loop();
 
   // Handle encoder rotation
   int pos = encPos;
@@ -161,8 +166,7 @@ void loop() {
     lastEncPos = pos;
 
     // Haptic feedback - use effect 1 (strong click) for snappiness
-    instance.setHapticEffects(1);
-    instance.vibrator();
+    VOID_HAL::vibrate(1);
 
     if (sshTerminal->is_in_launcher()) {
       lvgl_lock();
@@ -192,8 +196,7 @@ void loop() {
     if (isPressed) {
       buttonPressStart = now;
       longPressHandled = false;
-      instance.setHapticEffects(1);
-      instance.vibrator();
+      VOID_HAL::vibrate(1);
     } else {
       // Released
       if (!longPressHandled && sshTerminal) {
@@ -204,7 +207,8 @@ void loop() {
           lv_obj_t *focused = lv_group_get_focused(g);
           if (focused) {
             const char *type = (const char *)lv_obj_get_user_data(focused);
-            sshTerminal->show_terminal();
+            // DO NOT call show_terminal() here anymore.
+            // The connection_task will handle it to ensure synchronization.
             sshTerminal->connect_to_profile(type);
           }
         } else {
@@ -212,8 +216,7 @@ void loop() {
           sshTerminal->handle_key_input('\n');
         }
         lvgl_unlock();
-        instance.setHapticEffects(7);
-        instance.vibrator();
+        VOID_HAL::vibrate(7);
       }
     }
   }
@@ -225,14 +228,14 @@ void loop() {
     lvgl_lock();
     sshTerminal->delete_current_history_entry();
     lvgl_unlock();
-    instance.setHapticEffects(14);
-    instance.vibrator();
+    VOID_HAL::vibrate(14);
   }
 
   // Update status bar periodically
   static uint32_t lastBattUpdate = 0;
   if (now - lastBattUpdate > 5000 && sshTerminal) {
     lastBattUpdate = now;
+    VOID_HAL::refreshPower();
     sshTerminal->update_status_bar();
   }
 
@@ -240,5 +243,8 @@ void loop() {
   lvgl_lock();
   lv_timer_handler();
   lvgl_unlock();
+
+  // Final cleanup loop call is redundant, removed to consolidate above.
+
   delay(5);
 }
