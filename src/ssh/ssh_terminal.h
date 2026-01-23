@@ -94,6 +94,7 @@ public:
   void update_status_bar();
   void update_input_display();
   void flush_display_buffer();
+  void display_neofetch_banner();
 
   // Hardware feedback
   void vibrate(uint32_t ms = 50);

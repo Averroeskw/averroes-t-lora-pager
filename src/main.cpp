@@ -136,12 +136,7 @@ void setup() {
   sshTerminal->wifi_auto_connect();
 
   // Display startup message (will be visible when user enters terminal)
-  sshTerminal->append_text("═══════════════════════════════════════\n");
-  sshTerminal->append_text("AVERROES POCKET SSH v2.7 Elite Ultra\n");
-  sshTerminal->append_text("Infinity Wireframe / BG-Sync Active\n");
-  sshTerminal->append_text("------------------------------------\n");
-  sshTerminal->append_text("Mode: PLUG & PLAY (Handcoded Fallback)\n");
-  sshTerminal->append_text("Tip: Use encoder to scroll history.\n");
+  sshTerminal->display_neofetch_banner();
   sshTerminal->update_status_bar();
 
   // Hardware interrupts for encoder
