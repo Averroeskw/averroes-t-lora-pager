@@ -937,8 +937,6 @@ void SSHTerminal::handle_key_input(char key) {
       send_command(current_input.c_str());
     } else {
       // Local command processing
-      append_text("> ");
-      append_text(current_input.c_str());
       append_text("\n");
 
       if (current_input.rfind("connect ", 0) == 0) {
@@ -1010,10 +1008,6 @@ void SSHTerminal::handle_key_input(char key) {
         } else {
           append_text("Usage: save wg <priv> <pub> <end:port> <ip>\n");
         }
-      } else if (current_input == "home") {
-        disconnect();
-        show_launcher();
-        return; // Skip history for home navigation
       } else if (current_input == "disconnect") {
         wifi_disconnect();
         append_text("WiFi disconnected.\n");
@@ -1021,6 +1015,11 @@ void SSHTerminal::handle_key_input(char key) {
         disconnect();
       } else if (current_input == "clear") {
         clear_terminal();
+      } else if (current_input == "settings") {
+        show_launcher();
+        return; // Skip history for settings navigation
+      } else if (current_input == "neofetch") {
+        display_neofetch_banner();
       } else if (current_input == "help") {
         append_text("Commands:\n");
         append_text("  connect <SSID> <PASS> - Connect WiFi\n");
@@ -1028,9 +1027,10 @@ void SSHTerminal::handle_key_input(char key) {
         append_text("  save <local|remote> <H> <P> <U> <P> - Save Profile\n");
         append_text(
             "  save wg <priv> <pub> <end:port> <ip> - Save WireGuard\n");
-        append_text("  home - Return to Launcher\n");
+        append_text("  settings - Go to settings\n");
         append_text("  exit - Disconnect SSH\n");
         append_text("  clear - Clear terminal\n");
+        append_text("  neofetch - Display system info\n");
       } else if (!current_input.empty()) {
         append_text("Unknown command. Type 'help'\n");
       }
@@ -1055,11 +1055,18 @@ void SSHTerminal::handle_key_input(char key) {
     if (cursor_pos > 0 && !current_input.empty()) {
       current_input.erase(cursor_pos - 1, 1);
       cursor_pos--;
+      if (!ssh_connected) {
+        append_text("\b \b");
+      }
     }
   } else if (key >= 32 && key <= 126) {
     // Printable character
     current_input.insert(cursor_pos, 1, key);
     cursor_pos++;
+    if (!ssh_connected) {
+      char buf[2] = {key, 0};
+      append_text(buf);
+    }
   }
 
   update_input_display();
@@ -1346,4 +1353,22 @@ void SSHTerminal::grid_scroll_anim_cb(void *var, int32_t v) {
   if (opa < 0)
     opa = 0;
   lv_obj_set_style_bg_opa(obj, opa, 0);
+}
+
+void SSHTerminal::display_neofetch_banner() {
+    clear_terminal();
+    append_text("       #FFD700 .--.        \n");
+    append_text("      |o_o |       \n");
+    append_text("      |:_/ |       \n");
+    append_text("     //   \\ \\      \n");
+    append_text("    (|     | )     \n");
+    append_text("   /'\\_   _/`\\    \n");
+    append_text("   \\___)=(___/    \n\n");
+    append_text("#FFFFFF AVERROES TERMINAL#\n");
+    append_text("Firmware: v2.7 Elite Ultra\n");
+    append_text("MCU: ESP32-S3 @ 240MHz\n");
+    append_text("Flash: 16MB\n");
+    append_text("PSRAM: 8MB\n");
+    append_text("Display: ST7796 480x222\n");
+    append_text("--------------------------\n");
 }
